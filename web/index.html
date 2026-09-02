@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>uptime checker</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <h1>uptime checker</h1>
+    <span id="summary" class="summary"></span>
+  </header>
+
+  <form id="add-form" autocomplete="off">
+    <input id="url" type="url" placeholder="https://example.com" required>
+    <input id="name" type="text" placeholder="name (optional)" maxlength="200">
+    <button type="submit">add site</button>
+    <span id="form-error" class="error"></span>
+  </form>
+
+  <main id="board" class="board"></main>
+
+  <footer id="footer"></footer>
+  <script src="app.js"></script>
+</body>
+</html>

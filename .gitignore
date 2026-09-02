@@ -1,0 +1,20 @@
+# python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# go
+worker/uptime-worker
+worker/*.test
+
+# local env
+.env
+
+# editors
+.vscode/
+.idea/
+*.swp
