@@ -47,7 +47,8 @@ docker compose up --build -d       # same, in the background
 docker compose logs -f worker      # follow one service's logs
 docker compose ps                  # status of every container
 docker compose down                # stop, keep the database
-docker compose down -v             # stop and wipe the database
+docker compose down --volumes      # stop and wipe the database (the pgdata volume)
+docker compose down --volumes --rmi local   # also remove the built images
 ```
 
 Then open http://localhost:8080. The api is also exposed on http://localhost:8000
