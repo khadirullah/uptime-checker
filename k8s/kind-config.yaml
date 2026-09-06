@@ -1,0 +1,11 @@
+# single node cluster for a small machine.
+# the web service is a NodePort on 30080, mapped to localhost:8081 (compose keeps 8080).
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: uptime
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 8081
+        protocol: TCP

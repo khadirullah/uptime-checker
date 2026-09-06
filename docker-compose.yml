@@ -25,25 +25,17 @@ services:
       timeout: 3s
       retries: 10
 
-  # runs every file in db/migrations in name order, then exits.
-  # api and worker wait for it to finish successfully.
+  # applies db/migrations in name order, then exits. api and worker wait for it.
   migrate:
-    image: postgres:18-alpine
+    build: ./db
     depends_on:
       postgres:
         condition: service_healthy
     environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-uptime}
+      POSTGRES_DB: ${POSTGRES_DB:-uptime}
       PGPASSWORD: ${POSTGRES_PASSWORD:-uptime}
-    volumes:
-      - ./db/migrations:/migrations:ro
-    entrypoint: ["sh", "-c"]
-    command:
-      - |
-        set -e
-        for f in /migrations/*.sql; do
-          echo "applying $$f"
-          psql -h postgres -U ${POSTGRES_USER:-uptime} -d ${POSTGRES_DB:-uptime} -v ON_ERROR_STOP=1 -f "$$f"
-        done
     restart: "no"
 
   api:
@@ -78,7 +70,7 @@ services:
     depends_on:
       - api
     ports:
-      - "8080:80"
+      - "${WEB_PORT:-8080}:8080"
 
 volumes:
   pgdata:

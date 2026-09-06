@@ -1,0 +1,45 @@
+# no service: nothing talks to the worker, it only talks out.
+# it has no http endpoint either, so there are no probes yet. a liveness check for it is a
+# later improvement, and the right one is a heartbeat key in redis, not a fake http server.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: worker
+  template:
+    metadata:
+      labels:
+        app: worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532     # distroless "nonroot". must be numeric: the kubelet cannot verify a named user
+      containers:
+        - name: worker
+          image: uptime-checker/worker:dev
+          envFrom:
+            - configMapRef:
+                name: uptime-config
+          env:
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: uptime-db
+                  key: POSTGRES_PASSWORD
+            - name: DATABASE_URL
+              value: postgresql://$(POSTGRES_USER):$(POSTGRES_PASSWORD)@$(POSTGRES_HOST):5432/$(POSTGRES_DB)
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              memory: 128Mi

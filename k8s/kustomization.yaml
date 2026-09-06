@@ -1,0 +1,26 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: uptime
+
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - postgres.yaml
+  - redis.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - worker.yaml
+  - web.yaml
+
+# image tags in one place. the pipeline updates these lines to deploy a new build.
+images:
+  - name: uptime-checker/api
+    newTag: dev
+  - name: uptime-checker/worker
+    newTag: dev
+  - name: uptime-checker/web
+    newTag: dev
+  - name: uptime-checker/migrate
+    newTag: dev

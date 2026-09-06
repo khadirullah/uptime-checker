@@ -14,8 +14,40 @@ languages, a database, a queue, and everything that needs around them.
 | api      | Python, FastAPI | add, list and delete sites; serve current status and history |
 | worker   | Go              | queue sites once a minute, fetch them, record results |
 | web      | nginx, plain JS | the board; proxies `/api/` to the api container |
+| migrate  | shell, psql     | applies `db/migrations` in order, then exits |
 | postgres | Postgres 18     | sites and check history |
 | redis    | Redis 8         | check queue and latest status per site |
+
+## Architecture
+
+```mermaid
+graph LR
+    browser(["browser"])
+
+    subgraph runtime ["kubernetes namespace uptime, or docker compose"]
+        web["web<br/>nginx, static page"]
+        api["api<br/>FastAPI, 2 replicas"]
+        worker["worker<br/>Go"]
+        redis[("redis<br/>queue and latest status")]
+        postgres[("postgres<br/>sites and check history")]
+        migrate["migrate job<br/>runs once per deploy"]
+    end
+
+    sites(["monitored sites<br/>on the internet"])
+
+    browser -->|"GET / every 5s"| web
+    web -->|"proxy /api/"| api
+    api -->|"sites, history"| postgres
+    api -->|"read status, enqueue new site"| redis
+    worker -->|"pop queue, write status"| redis
+    worker -->|"read urls, write results"| postgres
+    worker -->|"GET every 60s"| sites
+    migrate -->|"apply db/migrations"| postgres
+```
+
+Only the worker makes outbound requests. The api and web never reach the
+internet, and only the api and worker reach the database. That split is what
+the NetworkPolicies will enforce later.
 
 How a check flows:
 
@@ -98,6 +130,7 @@ Each service has its own Dockerfile and builds on its own.
 docker build -t uptime-api    ./api
 docker build -t uptime-worker ./worker
 docker build -t uptime-web    ./web
+docker build -t uptime-migrate ./db
 ```
 
 ### Run a service outside Docker
@@ -140,6 +173,7 @@ Environment variables, all optional:
 | `REDIS_URL`              | `redis://localhost:6379/0`                         | api, worker |
 | `CHECK_INTERVAL_SECONDS` | `60`                                               | worker, api (display only) |
 | `HTTP_TIMEOUT_SECONDS`   | `10`                                               | worker |
+| `WEB_PORT`               | `8080`                                             | compose only, host port for the board |
 
 ## API
 
@@ -152,6 +186,62 @@ Environment variables, all optional:
 | GET    | `/api/sites/{id}`             | one site with status |
 | DELETE | `/api/sites/{id}`             | removes the site and its history |
 | GET    | `/api/sites/{id}/checks`      | history, newest first. `?limit=` up to 500 |
+
+## Run on Kubernetes
+
+The manifests in `k8s/` deploy the same stack to a cluster. They are written for
+a local [kind](https://kind.sigs.k8s.io) cluster and need `kind`, `kubectl` and
+Docker. The Makefile wraps the steps:
+
+```
+make kind-up     # one node cluster named "uptime", board mapped to localhost:8081
+make build       # build the four images with the :dev tag
+make load        # copy them into the kind node, no registry involved
+make deploy      # apply k8s/ and wait for everything to roll out
+make status      # pods, services, jobs, volume claims
+make logs-worker # follow one service
+make redeploy    # after a code change: build, load, restart the services
+make undeploy    # remove the namespace contents, including the database volume
+make kind-down   # delete the cluster
+```
+
+Then open http://localhost:8081. Compose and kind can run side by side, compose
+stays on 8080.
+
+What is in `k8s/`:
+
+| File                   | What it does |
+|------------------------|--------------|
+| `kind-config.yaml`     | single node, NodePort 30080 mapped to localhost:8081 |
+| `kustomization.yaml`   | namespace, resource list, image tags in one place |
+| `namespace.yaml`       | everything lives in `uptime` |
+| `configmap.yaml`       | non-secret settings, same names as `.env.example` |
+| `secret.yaml`          | the database password. demo value, replaced by a SealedSecret later |
+| `postgres.yaml`        | StatefulSet with a 1Gi volume claim and a headless Service |
+| `redis.yaml`           | Deployment, no persistence, the queue and cache rebuild themselves |
+| `migrate-job.yaml`     | Job that applies the migrations before the services start |
+| `api.yaml`             | 2 replicas, liveness on `/healthz`, readiness on `/readyz` |
+| `worker.yaml`          | 1 replica, no Service, nothing talks to it |
+| `web.yaml`             | nginx behind a NodePort Service |
+
+Decisions worth knowing:
+
+- **Liveness and readiness are different endpoints.** Liveness only says the
+  process is alive. Readiness checks Postgres and Redis. If the database goes
+  away, api pods drop out of the Service and come back when it returns, with
+  zero restarts. Wiring both probes to the same endpoint is the common mistake
+  that turns a database blip into a restart storm.
+- **The database URL is assembled in the pod spec** from ConfigMap values plus
+  the password from the Secret, using `$(VAR)` expansion. The password exists in
+  exactly one place.
+- **Every container runs as a numeric non-root uid** with a read only root
+  filesystem and all capabilities dropped. Distroless names its user `nonroot`,
+  and Kubernetes cannot verify a named user, so the worker states uid 65532
+  explicitly.
+- **Jobs are immutable**, so `make deploy` deletes the previous migrate Job
+  before applying. The pipeline will do the same through an ArgoCD hook.
+- **Image tags live in `kustomization.yaml`.** A deploy is a change to those
+  lines, which is what the pipeline will commit.
 
 ## Tests
 
@@ -178,6 +268,8 @@ go test ./...
 api/            FastAPI service, tests, Dockerfile
 worker/         Go service, tests, Dockerfile
 web/            static page, nginx config, Dockerfile
-db/migrations/  SQL applied at startup
+db/             migrations, the script that applies them, and their Dockerfile
+k8s/            kubernetes manifests and the kind cluster config
 docker-compose.yml
+Makefile        kind workflow
 ```
