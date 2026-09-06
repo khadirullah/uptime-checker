@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+# images published by the pipeline. after a merge to main the update-manifests job rewrites
+# newTag for each service that was rebuilt to the short commit sha, and commits this file.
+# that commit is the deploy. argocd will watch this overlay.
+images:
+  - name: uptime-checker/api
+    newName: ghcr.io/khadirullah/uptime-checker/api
+    newTag: latest
+  - name: uptime-checker/worker
+    newName: ghcr.io/khadirullah/uptime-checker/worker
+    newTag: latest
+  - name: uptime-checker/web
+    newName: ghcr.io/khadirullah/uptime-checker/web
+    newTag: latest
+  - name: uptime-checker/migrate
+    newName: ghcr.io/khadirullah/uptime-checker/migrate
+    newTag: latest

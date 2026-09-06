@@ -1,0 +1,22 @@
+# weekly dependency updates for every ecosystem in the repo. each update is a pull request
+# that runs through the pipeline, so a bumped base image gets scanned before it is merged.
+version: 2
+updates:
+  - package-ecosystem: pip
+    directory: /api
+    schedule: { interval: weekly }
+    groups:
+      python: { patterns: ["*"] }
+  - package-ecosystem: gomod
+    directory: /worker
+    schedule: { interval: weekly }
+    groups:
+      go: { patterns: ["*"] }
+  - package-ecosystem: docker
+    directories: [/api, /worker, /web, /db]
+    schedule: { interval: weekly }
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly }
+    groups:
+      actions: { patterns: ["*"] }

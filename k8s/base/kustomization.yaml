@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: uptime
+
+# the resources only. image names and tags are set by the overlays:
+#   overlays/local    images built on this machine and loaded into kind (make build load)
+#   overlays/release  images the pipeline pushed to ghcr, pinned to a commit
+resources:
+  - namespace.yaml
+  - configmap.yaml
+  - secret.yaml
+  - postgres.yaml
+  - redis.yaml
+  - migrate-job.yaml
+  - api.yaml
+  - worker.yaml
+  - web.yaml

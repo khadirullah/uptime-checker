@@ -27,8 +27,9 @@ import (
 )
 
 const (
-	queueKey = "checks:queue"
-	lockKey  = "scheduler:lock"
+	startupWait = 60 * time.Second
+	queueKey    = "checks:queue"
+	lockKey     = "scheduler:lock"
 )
 
 func statusKey(siteID int64) string {
@@ -78,6 +79,28 @@ type worker struct {
 	http *http.Client
 }
 
+// waitFor retries ping until it succeeds or the deadline passes. On a fresh cluster the
+// worker can start before dns knows the postgres service or before the migrate job has run,
+// and crashing into a restart loop for that is noise. Anything longer than a minute is real.
+func waitFor(ctx context.Context, name string, ping func() error) error {
+	deadline := time.Now().Add(startupWait)
+	for {
+		err := ping()
+		if err == nil {
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return err
+		}
+		log.Printf("waiting for %s: %v", name, err)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+}
+
 func main() {
 	cfg := loadConfig()
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -88,7 +111,7 @@ func main() {
 		log.Fatalf("postgres config: %v", err)
 	}
 	defer db.Close()
-	if err := db.Ping(ctx); err != nil {
+	if err := waitFor(ctx, "postgres", func() error { return db.Ping(ctx) }); err != nil {
 		log.Fatalf("postgres ping: %v", err)
 	}
 
@@ -98,7 +121,7 @@ func main() {
 	}
 	rdb := redis.NewClient(opts)
 	defer rdb.Close()
-	if err := rdb.Ping(ctx).Err(); err != nil {
+	if err := waitFor(ctx, "redis", func() error { return rdb.Ping(ctx).Err() }); err != nil {
 		log.Fatalf("redis ping: %v", err)
 	}
 

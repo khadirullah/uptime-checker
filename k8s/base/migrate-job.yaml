@@ -13,7 +13,7 @@ spec:
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true
-        runAsUser: 70        # postgres user in the alpine image
+        runAsUser: 10002     # the migrate user created in db/Dockerfile
       containers:
         - name: migrate
           image: uptime-checker/migrate:dev

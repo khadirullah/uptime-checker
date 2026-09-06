@@ -14,7 +14,7 @@ languages, a database, a queue, and everything that needs around them.
 | api      | Python, FastAPI | add, list and delete sites; serve current status and history |
 | worker   | Go              | queue sites once a minute, fetch them, record results |
 | web      | nginx, plain JS | the board; proxies `/api/` to the api container |
-| migrate  | shell, psql     | applies `db/migrations` in order, then exits |
+| migrate  | shell, psql     | applies `db/migrations` in order, then exits. alpine plus the postgres client, 20MB |
 | postgres | Postgres 18     | sites and check history |
 | redis    | Redis 8         | check queue and latest status per site |
 
@@ -210,19 +210,21 @@ stays on 8080.
 
 What is in `k8s/`:
 
-| File                   | What it does |
-|------------------------|--------------|
-| `kind-config.yaml`     | single node, NodePort 30080 mapped to localhost:8081 |
-| `kustomization.yaml`   | namespace, resource list, image tags in one place |
-| `namespace.yaml`       | everything lives in `uptime` |
-| `configmap.yaml`       | non-secret settings, same names as `.env.example` |
-| `secret.yaml`          | the database password. demo value, replaced by a SealedSecret later |
-| `postgres.yaml`        | StatefulSet with a 1Gi volume claim and a headless Service |
-| `redis.yaml`           | Deployment, no persistence, the queue and cache rebuild themselves |
-| `migrate-job.yaml`     | Job that applies the migrations before the services start |
-| `api.yaml`             | 2 replicas, liveness on `/healthz`, readiness on `/readyz` |
-| `worker.yaml`          | 1 replica, no Service, nothing talks to it |
-| `web.yaml`             | nginx behind a NodePort Service |
+| File                          | What it does |
+|-------------------------------|--------------|
+| `kind-config.yaml`            | single node, NodePort 30080 mapped to localhost:8081 |
+| `base/kustomization.yaml`     | namespace and the resource list. no image tags |
+| `base/namespace.yaml`         | everything lives in `uptime` |
+| `base/configmap.yaml`         | non-secret settings, same names as `.env.example` |
+| `base/secret.yaml`            | the database password. demo value, replaced by a SealedSecret later |
+| `base/postgres.yaml`          | StatefulSet with a 1Gi volume claim and a headless Service |
+| `base/redis.yaml`             | Deployment, no persistence, the queue and cache rebuild themselves |
+| `base/migrate-job.yaml`       | Job that applies the migrations before the services start |
+| `base/api.yaml`               | 2 replicas, liveness on `/healthz`, readiness on `/readyz` |
+| `base/worker.yaml`            | 1 replica, no Service, nothing talks to it |
+| `base/web.yaml`               | nginx behind a NodePort Service |
+| `overlays/local/`             | base plus the `:dev` tags of images built on this machine. what `make deploy` applies |
+| `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline. what ArgoCD will watch |
 
 Decisions worth knowing:
 
@@ -240,12 +242,18 @@ Decisions worth knowing:
   explicitly.
 - **Jobs are immutable**, so `make deploy` deletes the previous migrate Job
   before applying. The pipeline will do the same through an ArgoCD hook.
-- **Image tags live in `kustomization.yaml`.** A deploy is a change to those
-  lines, which is what the pipeline will commit.
+- **Image tags live in the overlays, not the base.** The local overlay points
+  at `uptime-checker/<service>:dev`, which is what `make build` produces. The
+  release overlay points at `ghcr.io/khadirullah/uptime-checker/<service>` at a
+  commit sha. A deploy is the pipeline changing that sha and committing it. The
+  two never collide, so a pipeline run does not break the local loop.
 
 ## Tests
 
-api, no services needed (Postgres and Redis are replaced with in-memory fakes):
+These are the same commands the pipeline runs.
+
+api, no services needed (Postgres and Redis are replaced with in-memory fakes).
+`pytest.ini` turns on coverage and fails the run if it drops below 65%:
 
 ```
 cd api
@@ -258,18 +266,86 @@ worker:
 
 ```
 cd worker
+gofmt -l .        # prints nothing when formatted
 go vet ./...
-go test ./...
+go test -race ./...
 ```
+
+images, after `make build`. Both run from Docker images, nothing to install:
+
+```
+make hadolint     # Dockerfile lint
+make scan         # trivy, fails on a fixable HIGH or CRITICAL
+```
+
+## Pipeline
+
+`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`.
+
+```mermaid
+graph LR
+    changes["changes<br/>which services did this touch?"]
+    ta["test-api<br/>flake8, pytest, coverage gate"]
+    tw["test-worker<br/>gofmt, vet, test -race"]
+    b["build, one per changed service<br/>hadolint, build once, trivy, push"]
+    um["update-manifests<br/>pin release overlay to the sha, commit"]
+    ok["ci-ok<br/>the one check branch protection requires"]
+
+    changes --> ta --> b
+    changes --> tw --> b
+    b -->|"main only"| um
+    ta --> ok
+    tw --> ok
+    b --> ok
+```
+
+What each stage does and why it is shaped that way:
+
+- **Path filters.** `changes` lists the services whose files changed. A pull
+  request that touches `web/` builds and scans only the web image. A change to
+  `k8s/` or the README builds nothing. A manual run builds all four.
+- **Real gates.** flake8 fails the job on any finding. pytest fails below the
+  coverage threshold. gofmt, vet and the race detector all fail the job. There
+  is no `--exit-zero` and nothing is optional.
+- **Build once.** Each image is built, loaded into the runner, scanned by its
+  sha tag, and then that same image is pushed. Nothing is rebuilt between scan
+  and push, so what was scanned is what ships. Scanning a `latest` tag that may
+  not exist yet is the mistake this avoids.
+- **Trivy fails on fixable HIGH and CRITICAL only.** A finding with no fix
+  available is reported, not blocking, because there is nothing a contributor
+  can do about it. The two alpine images run `apk upgrade` at build time for
+  the same reason: the upstream images lag alpine's fixes by days to weeks.
+- **Least permission.** The workflow token can only read. `build` adds
+  `packages: write` to push images. `update-manifests` adds `contents: write`
+  to commit the overlay, and it is the only job that can, and only on `main`.
+  Pull requests never push anything.
+- **The deploy is a commit.** After a push to `main`, `update-manifests`
+  rewrites `newTag` in `k8s/overlays/release/kustomization.yaml` for each
+  service that was rebuilt and commits it. That commit is what ArgoCD will
+  pick up. Pushes made with the workflow token do not trigger workflows, so
+  this cannot loop.
+- **One required check.** `ci-ok` is green only if no job failed or was
+  cancelled, and skipped jobs count as fine. Branch protection on `main` needs
+  to require just that one check, however many matrix jobs ran.
+
+Images are published to `ghcr.io/khadirullah/uptime-checker/<service>` tagged
+with the short commit sha, plus `latest` on `main`.
+
+`.github/dependabot.yml` opens weekly pull requests for pip, Go modules, the
+four base images and the actions. Each one runs through the pipeline, so a
+bumped base image is scanned before it is merged.
 
 ## Layout
 
 ```
+.github/        the pipeline and dependabot config
 api/            FastAPI service, tests, Dockerfile
 worker/         Go service, tests, Dockerfile
 web/            static page, nginx config, Dockerfile
 db/             migrations, the script that applies them, and their Dockerfile
-k8s/            kubernetes manifests and the kind cluster config
+k8s/base/       kubernetes manifests
+k8s/overlays/   local (kind, :dev images) and release (GHCR images, pinned by the pipeline)
+k8s/kind-config.yaml
 docker-compose.yml
-Makefile        kind workflow
+Makefile        kind workflow and the image gates
 ```

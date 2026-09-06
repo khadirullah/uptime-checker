@@ -1,0 +1,213 @@
+# lint, test, build, scan, push, and pin the release manifests. one workflow, path filtered:
+# a change under api/ builds and scans only the api image. see README "Pipeline".
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:   # manual run builds every service, useful after a base image change
+
+# the default token can only read. jobs that need more say so themselves.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # which services did this change touch? everything downstream keys off this.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      api: ${{ steps.filter.outputs.api }}
+      worker: ${{ steps.filter.outputs.worker }}
+      services: ${{ steps.services.outputs.list }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: dorny/paths-filter@v4.0.3
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          filters: |
+            api:
+              - 'api/**'
+              - '.github/workflows/ci.yml'
+            worker:
+              - 'worker/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'web/**'
+              - '.github/workflows/ci.yml'
+            migrate:
+              - 'db/**'
+              - '.github/workflows/ci.yml'
+      - id: services
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            list='["api","worker","web","migrate"]'
+          else
+            list='${{ steps.filter.outputs.changes }}'
+          fi
+          echo "services: $list"
+          echo "list=$list" >> "$GITHUB_OUTPUT"
+
+  test-api:
+    needs: changes
+    if: needs.changes.outputs.api == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: api
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-python@v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: api/requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - name: flake8
+        run: flake8 app tests
+      - name: pytest with coverage gate
+        # pytest.ini sets --cov-fail-under. a drop below it fails the job.
+        run: pytest
+
+  test-worker:
+    needs: changes
+    if: needs.changes.outputs.worker == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: worker
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-go@v7.0.0
+        with:
+          go-version-file: worker/go.mod
+          cache-dependency-path: worker/go.sum
+      - name: gofmt
+        run: test -z "$(gofmt -l .)" || { gofmt -l .; echo "run gofmt -w ."; exit 1; }
+      - name: go vet
+        run: go vet ./...
+      - name: go test
+        run: go test -race ./...
+
+  # one job per changed service. the image is built once, scanned, and that same image is
+  # pushed. nothing is rebuilt between scan and push, so what was scanned is what ships.
+  build:
+    needs: [changes, test-api, test-worker]
+    # tests for untouched services are skipped, not failed, and must not block the build
+    if: ${{ !cancelled() && needs.changes.outputs.services != '[]' && needs.test-api.result != 'failure' && needs.test-worker.result != 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        service: ${{ fromJSON(needs.changes.outputs.services) }}
+        include:
+          - service: migrate
+            context: db
+    env:
+      CONTEXT: ${{ matrix.context || matrix.service }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - name: hadolint
+        uses: hadolint/hadolint-action@v3.5.0
+        with:
+          dockerfile: ${{ env.CONTEXT }}/Dockerfile
+
+      - name: image name
+        # ghcr requires a lowercase path. the repository owner may not be.
+        run: echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/uptime-checker/${{ matrix.service }}" >> "$GITHUB_ENV"
+
+      - uses: docker/metadata-action@v6.2.0
+        id: meta
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=sha,prefix=
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - uses: docker/setup-buildx-action@v4.3.0
+
+      - name: build
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: ${{ env.CONTEXT }}
+          load: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.service }}
+
+      - name: trivy
+        # scans the image just built, by its sha tag. fails on a HIGH or CRITICAL that has a fix.
+        # unfixed findings are reported but cannot block: there is nothing to do about them yet.
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          scanners: vuln
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+          format: table
+
+      - name: login to ghcr
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: push
+        if: github.event_name == 'push'
+        run: echo "${{ steps.meta.outputs.tags }}" | xargs -n1 docker push
+
+  # pin the release overlay to the images just pushed. this commit is the deploy.
+  # the only job that can write to the repository, and only on main.
+  update-manifests:
+    needs: [changes, build]
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name == 'push' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: release-manifests
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: set image tags
+        run: |
+          short="${GITHUB_SHA::7}"
+          for s in $(echo '${{ needs.changes.outputs.services }}' | jq -r '.[]'); do
+            yq -i "(.images[] | select(.name == \"uptime-checker/$s\") | .newTag) = \"$short\"" \
+              k8s/overlays/release/kustomization.yaml
+          done
+          git diff
+      - name: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add k8s/overlays/release/kustomization.yaml
+          git diff --staged --quiet && { echo "nothing to deploy"; exit 0; }
+          git commit -m "deploy: ${{ needs.changes.outputs.services }} at ${GITHUB_SHA::7}"
+          # another run may have pushed in the meantime
+          for attempt in 1 2 3; do echo "push attempt $attempt"; git push && exit 0; git pull --rebase; done
+          exit 1
+
+  # one check for branch protection to require. green only if nothing above failed.
+  ci-ok:
+    needs: [changes, test-api, test-worker, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          echo '${{ toJSON(needs) }}'
+          [ "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') }}" = "false" ]
