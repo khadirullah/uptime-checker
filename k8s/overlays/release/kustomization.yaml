@@ -1,9 +1,7 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-
 # the base sets this too, but only for its own resources. the SealedSecret needs it here.
 namespace: uptime
-
 resources:
   - ../../base
   # the database password, encrypted with the cluster's public key by `make seal`. the
@@ -15,13 +13,13 @@ resources:
 images:
   - name: uptime-checker/api
     newName: ghcr.io/khadirullah/uptime-checker/api
-    newTag: 8670b14
+    newTag: ebbeca7
   - name: uptime-checker/worker
     newName: ghcr.io/khadirullah/uptime-checker/worker
-    newTag: 64ab785
+    newTag: ebbeca7
   - name: uptime-checker/web
     newName: ghcr.io/khadirullah/uptime-checker/web
-    newTag: e1cc326
+    newTag: ebbeca7
   - name: uptime-checker/migrate
     newName: ghcr.io/khadirullah/uptime-checker/migrate
-    newTag: 9bd2465
+    newTag: ebbeca7
