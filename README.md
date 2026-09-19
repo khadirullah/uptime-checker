@@ -614,3 +614,7 @@ k8s/kind-config.yaml
 docker-compose.yml
 Makefile        kind workflow and the image gates
 ```
+
+## License
+
+MIT, see [LICENSE](LICENSE). Copy anything here that is useful to you.
