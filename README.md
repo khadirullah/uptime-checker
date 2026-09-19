@@ -315,7 +315,8 @@ What each stage does and why it is shaped that way:
   available is reported, not blocking, because there is nothing a contributor
   can do about it. The two alpine images run `apk upgrade` at build time for
   the same reason: the upstream images lag alpine's fixes by days to weeks.
-- **Least permission.** The workflow token can only read. `build` adds
+- **Least permission.** The workflow token can only read the repository and
+  its pull requests. `build` adds
   `packages: write` to push images. `update-manifests` adds `contents: write`
   to commit the overlay, and it is the only job that can, and only on `main`.
   Pull requests never push anything.

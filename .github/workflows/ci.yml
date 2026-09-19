@@ -10,8 +10,10 @@ on:
   workflow_dispatch:   # manual run builds every service, useful after a base image change
 
 # the default token can only read. jobs that need more say so themselves.
+# pull-requests: read is for the paths filter, which lists a pull request's files through the api.
 permissions:
   contents: read
+  pull-requests: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
