@@ -46,8 +46,9 @@ graph LR
 ```
 
 Only the worker makes outbound requests. The api and web never reach the
-internet, and only the api and worker reach the database. That split is what
-the NetworkPolicies will enforce later.
+internet, and only the api, worker and migrate job reach the database. The
+NetworkPolicies in `k8s/base/network-policies.yaml` enforce exactly that
+picture, see "Network policies" under Kubernetes.
 
 How a check flows:
 
@@ -194,7 +195,7 @@ a local [kind](https://kind.sigs.k8s.io) cluster and need `kind`, `kubectl` and
 Docker. The Makefile wraps the steps:
 
 ```
-make kind-up     # one node cluster named "uptime" with the sealed-secrets controller, board on localhost:8081
+make kind-up     # one node cluster named "uptime", policy enforcement and sealed-secrets installed, board on localhost:8081
 make build       # build the four images with the :dev tag
 make load        # copy them into the kind node, no registry involved
 make deploy      # apply k8s/ and wait for everything to roll out
@@ -224,6 +225,7 @@ What is in `k8s/`:
 | `base/api.yaml`               | 2 replicas, liveness on `/healthz`, readiness on `/readyz` |
 | `base/worker.yaml`            | 1 replica, no Service, nothing talks to it |
 | `base/web.yaml`               | nginx behind a NodePort Service |
+| `base/network-policies.yaml`  | default deny, then one allow per arrow in the architecture diagram |
 | `overlays/local/`             | base plus the `:dev` tags of images built on this machine, and a plain Secret generated from the gitignored `secret.env`. what `make deploy` applies |
 | `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline, and the SealedSecret. what ArgoCD will watch |
 | `sealed-secrets/cert.pem`     | the cluster's public sealing cert. committed on purpose, anyone can seal with it and nobody can unseal |
@@ -273,6 +275,38 @@ Two things follow from "only the cluster can open it":
 Why sealed-secrets and not External Secrets Operator: ESO needs a secret store
 such as Vault or a cloud secret manager to fetch from, which this project does
 not have and would pay for. Sealed-secrets needs nothing but the cluster.
+
+### Network policies
+
+`k8s/base/network-policies.yaml` starts with a default deny on ingress and
+egress for every pod in the namespace, then allows one path per arrow in the
+architecture diagram and nothing else:
+
+| Pod      | May be reached by            | May reach |
+|----------|------------------------------|-----------|
+| web      | anyone, on 8080 (the NodePort) | api on 8000 |
+| api      | web, on 8000                 | postgres on 5432, redis on 6379 |
+| worker   | nobody                       | postgres, redis, and the internet on 80 and 443 |
+| migrate  | nobody                       | postgres on 5432 |
+| postgres | api, worker, migrate on 5432 | nothing |
+| redis    | api, worker on 6379          | nothing |
+
+Every pod may also reach CoreDNS, since services are names. "The internet" for
+the worker is `0.0.0.0/0` minus the private ranges, so a site URL pointing at
+the cluster or the host network is refused.
+
+Two things worth knowing:
+
+- **kind does not enforce policies by itself.** Its default CNI routes and
+  nothing more, and a deny-all policy changes nothing. `make kind-up` installs
+  [kube-network-policies](https://github.com/kubernetes-sigs/kube-network-policies),
+  which adds enforcement on top of the existing CNI. The same policies work
+  unchanged on Calico, Cilium or a managed cluster, since they are plain
+  `networking.k8s.io/v1`.
+- **Test from a long-lived pod.** A one-shot pod that probes in its first
+  hundred milliseconds can race the enforcer learning the pod's IP and report a
+  connection that a moment later would be dropped. `kubectl run ... sleep` then
+  `kubectl exec` gives a true answer.
 - **Every container runs as a numeric non-root uid** with a read only root
   filesystem and all capabilities dropped. Distroless names its user `nonroot`,
   and Kubernetes cannot verify a named user, so the worker states uid 65532

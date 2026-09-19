@@ -11,12 +11,21 @@ SEALED_CERT    := k8s/sealed-secrets/cert.pem
 SEALED_KEY     := k8s/sealed-secrets/key.yaml
 SEALED_KEY_SELECTOR := sealedsecrets.bitnami.com/sealed-secrets-key=active
 
-.PHONY: kind-up kind-down build load deploy redeploy status logs-% undeploy hadolint scan \
-        sealed-secrets-up sealed-key-backup seal
+# kind's default cni (kindnet) routes but does not enforce NetworkPolicy. this daemonset
+# from kubernetes-sigs adds the enforcement without replacing the cni.
+KNP_VERSION := v1.1.1
 
-kind-up:            ## create the kind cluster and install the sealed-secrets controller
+.PHONY: kind-up kind-down build load deploy redeploy status logs-% undeploy hadolint scan \
+        sealed-secrets-up sealed-key-backup seal network-policies-up
+
+kind-up:            ## create the kind cluster, add network policy enforcement and the sealed-secrets controller
 	kind create cluster --config k8s/kind-config.yaml --wait 120s
+	$(MAKE) network-policies-up
 	$(MAKE) sealed-secrets-up
+
+network-policies-up: ## install kube-network-policies so the policies in k8s/base are enforced
+	kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/kube-network-policies/$(KNP_VERSION)/install.yaml
+	kubectl -n kube-system rollout status daemonset/kube-network-policies --timeout=120s
 
 sealed-secrets-up:  ## install the controller. a saved sealing key is restored first, so old SealedSecrets still open
 	@if [ -f $(SEALED_KEY) ]; then kubectl apply -f $(SEALED_KEY); else echo "no saved sealing key at $(SEALED_KEY), the controller will generate one"; fi
