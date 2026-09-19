@@ -7,9 +7,9 @@ Built as the application workload for a DevSecOps pipeline project. The app is
 deliberately small. The interesting part is running it: three services in two
 languages, a database, a queue, and everything that needs around them.
 
-Status: the pipeline, sealed secrets and network policies are in. ArgoCD
-watching the release overlay and an autoscaler on the api are landing next,
-and the docs will be reshaped around them once they do.
+Status: the pipeline, sealed secrets, network policies and ArgoCD are in.
+An autoscaler on the api is landing next, and the docs will be reshaped once
+it does.
 
 ## Services
 
@@ -199,7 +199,7 @@ a local [kind](https://kind.sigs.k8s.io) cluster and need `kind`, `kubectl` and
 Docker. The Makefile wraps the steps:
 
 ```
-make kind-up     # one node cluster named "uptime" with policy enforcement and sealed-secrets installed
+make kind-up     # one node cluster named "uptime" with policy enforcement, sealed-secrets and argocd
 make build       # build the four images with the :dev tag
 make load        # copy them into the kind node, no registry involved
 make deploy      # apply k8s/ and wait for everything to roll out
@@ -210,6 +210,7 @@ make undeploy    # remove the namespace contents, including the database volume
 make kind-down   # delete the cluster
 make seal        # new random database password, sealed for the release overlay
 make sealed-key-backup  # save the cluster's sealing key so a rebuilt cluster can still open it
+make argocd-ui   # port-forward the argocd ui to localhost:8083
 ```
 
 Then open http://localhost:8082. That is the local overlay in namespace
@@ -235,6 +236,8 @@ What is in `k8s/`:
 | `overlays/local/`             | base plus the `:dev` tags of images built on this machine, and a plain Secret generated from the gitignored `secret.env`. what `make deploy` applies |
 | `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline, and the SealedSecret. what ArgoCD will watch |
 | `sealed-secrets/cert.pem`     | the cluster's public sealing cert. committed on purpose, anyone can seal with it and nobody can unseal |
+| `argocd/install/`             | argocd itself, pinned, with the unused controllers scaled to zero |
+| `argocd/application.yaml`     | the one Application: release overlay on `main` into namespace `uptime`, automated sync |
 
 Decisions worth knowing:
 
@@ -313,6 +316,35 @@ Two things worth knowing:
   hundred milliseconds can race the enforcer learning the pod's IP and report a
   connection that a moment later would be dropped. `kubectl run ... sleep` then
   `kubectl exec` gives a true answer.
+
+### GitOps with ArgoCD
+
+`k8s/argocd/application.yaml` is the whole GitOps setup: one Application that
+watches `k8s/overlays/release` on `main` and keeps namespace `uptime` equal to
+it. Sync is automated with prune and self heal, so `main` is the only way to
+change what runs there. Scale a deployment by hand and ArgoCD scales it back
+within its next reconcile.
+
+The chain from a merge to a running pod:
+
+1. A change under `api/` merges to `main`. The pipeline tests it, builds and
+   scans the image, pushes it to GHCR, and opens a deploy pull request that
+   pins the release overlay to the new tag.
+2. That pull request goes through `ci-ok` and gets merged.
+3. ArgoCD sees the new commit on `main`, by default within three minutes, and
+   syncs. Wave 0 applies the stores, the config and the SealedSecret. Wave 1
+   runs the migrate Job and waits for it to finish. Wave 2 rolls the api,
+   worker and web deployments to the new image.
+
+That order was checked on a fresh namespace: postgres and redis first, migrate
+eleven seconds later once they were healthy, the three services ten seconds
+after the job completed.
+
+`make argocd-ui` port-forwards the UI to https://localhost:8083. The user is
+`admin` and the target prints the command for the initial password. The dex,
+notifications and applicationset controllers are scaled to zero in
+`k8s/argocd/install/`, since one user with no SSO does not need them and they
+would idle at about 200MB on a laptop.
 - **Every container runs as a numeric non-root uid** with a read only root
   filesystem and all capabilities dropped. Distroless names its user `nonroot`,
   and Kubernetes cannot verify a named user, so the worker states uid 65532
@@ -409,8 +441,9 @@ What each stage does and why it is shaped that way:
   a fine-grained token scoped to this repository, stored as the
   `DEPLOY_PR_TOKEN` secret, because a pull request opened with the workflow
   token would not trigger CI. The pull request runs through `ci-ok` like any
-  other, and merging it is the deploy. That merge is what ArgoCD will pick up,
-  and it builds nothing because only `k8s/` changed, so it cannot loop.
+  other, and merging it is the deploy. ArgoCD picks that merge up and rolls
+  the namespace forward. The merge builds nothing because only `k8s/`
+  changed, so it cannot loop.
 - **One required check.** `ci-ok` is green only if no job failed or was
   cancelled, and skipped jobs count as fine. Branch protection on `main` needs
   to require just that one check, however many matrix jobs ran.
@@ -456,6 +489,8 @@ web/            static page, nginx config, Dockerfile
 db/             migrations, the script that applies them, and their Dockerfile
 k8s/base/       kubernetes manifests
 k8s/overlays/   local (kind, :dev images) and release (GHCR images, pinned by the pipeline)
+k8s/argocd/     argocd install and the Application that deploys the release overlay
+k8s/sealed-secrets/  the public sealing cert
 k8s/kind-config.yaml
 docker-compose.yml
 Makefile        kind workflow and the image gates

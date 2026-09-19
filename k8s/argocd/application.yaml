@@ -1,0 +1,29 @@
+# the one Application: the release overlay on main, into namespace uptime on this cluster.
+# automated sync with prune and self heal, so main is the only source of truth for what
+# runs there. merging a deploy pull request is the deploy; nothing else touches the namespace.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: uptime-checker
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io   # deleting the Application removes what it deployed
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/khadirullah/uptime-checker.git
+    targetRevision: main
+    path: k8s/overlays/release
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: uptime
+  syncPolicy:
+    automated:
+      prune: true      # a resource removed from the overlay is removed from the cluster
+      selfHeal: true   # a manual change in the namespace is reverted to what main says
+    retry:
+      limit: 5
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 3m

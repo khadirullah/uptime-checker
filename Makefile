@@ -17,12 +17,26 @@ SEALED_KEY_SELECTOR := sealedsecrets.bitnami.com/sealed-secrets-key=active
 KNP_VERSION := v1.1.1
 
 .PHONY: kind-up kind-down build load deploy redeploy status logs-% undeploy hadolint scan \
-        sealed-secrets-up sealed-key-backup seal network-policies-up
+        sealed-secrets-up sealed-key-backup seal network-policies-up argocd-up argocd-app argocd-ui
 
-kind-up:            ## create the kind cluster, add network policy enforcement and the sealed-secrets controller
+kind-up:            ## create the kind cluster with policy enforcement, sealed-secrets and argocd
 	kind create cluster --config k8s/kind-config.yaml --wait 120s
 	$(MAKE) network-policies-up
 	$(MAKE) sealed-secrets-up
+	$(MAKE) argocd-up
+	$(MAKE) argocd-app
+
+argocd-up:          ## install argocd (server-side apply, the crds are too big for client-side)
+	kubectl apply --server-side -k k8s/argocd/install
+	kubectl -n argocd rollout status deployment/argocd-server deployment/argocd-repo-server --timeout=300s
+	kubectl -n argocd rollout status statefulset/argocd-application-controller --timeout=300s
+
+argocd-app:         ## register the Application: release overlay on main, into namespace uptime
+	kubectl apply -f k8s/argocd/application.yaml
+
+argocd-ui:          ## port-forward the argocd ui to localhost:8083. user admin, password from the initial secret
+	@echo "password: kubectl -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d"
+	kubectl -n argocd port-forward svc/argocd-server 8083:443
 
 network-policies-up: ## install kube-network-policies so the policies in k8s/base are enforced
 	kubectl apply -f https://raw.githubusercontent.com/kubernetes-sigs/kube-network-policies/$(KNP_VERSION)/install.yaml

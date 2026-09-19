@@ -1,0 +1,19 @@
+# argocd, pinned. the upstream non-ha install plus two local patches.
+# apply with `kubectl apply --server-side -k k8s/argocd/install`: the crds are too big for
+# client-side apply's annotation. `make argocd-up` does that and waits.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: argocd
+resources:
+  - namespace.yaml
+  - https://raw.githubusercontent.com/argoproj/argo-cd/v3.5.3/manifests/install.yaml
+patches:
+  # this cluster has one user and no sso, notifications or applicationsets. the three
+  # controllers for those would idle at about 200MB on a machine with 8GB.
+  - patch: |
+      - op: replace
+        path: /spec/replicas
+        value: 0
+    target:
+      kind: Deployment
+      name: argocd-(dex-server|notifications-controller|applicationset-controller)
