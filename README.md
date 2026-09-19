@@ -469,6 +469,11 @@ What each stage does and why it is shaped that way:
 - **One required check.** `ci-ok` is green only if no job failed or was
   cancelled, and skipped jobs count as fine. Branch protection on `main` needs
   to require just that one check, however many matrix jobs ran.
+- **Pushes are never cancelled.** Pull request runs share a concurrency group
+  per branch, so a new push cancels the older run, which was testing code that
+  no longer exists. Runs on `main` are grouped by commit sha instead. GitHub
+  keeps at most one queued run per group, and a cancelled run on `main` is an
+  image that never got built or pinned.
 
 Images are published to `ghcr.io/khadirullah/uptime-checker/<service>` tagged
 with the short commit sha, plus `latest` on `main`.
