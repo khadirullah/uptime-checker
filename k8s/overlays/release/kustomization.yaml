@@ -1,7 +1,14 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
+
+# the base sets this too, but only for its own resources. the SealedSecret needs it here.
+namespace: uptime
+
 resources:
   - ../../base
+  # the database password, encrypted with the cluster's public key by `make seal`. the
+  # controller in the cluster turns it into the Secret named uptime-db that the pods read.
+  - sealed-secret.yaml
 # images published by the pipeline. after a merge to main the update-manifests job rewrites
 # newTag for each service that was rebuilt to the short commit sha and opens a pull request.
 # merging that pull request is the deploy. argocd will watch this overlay.

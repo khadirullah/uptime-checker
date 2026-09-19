@@ -14,6 +14,8 @@ worker/*.test
 # local env
 .env
 k8s/overlays/local/secret.env
+# the cluster's private sealing key, saved by make sealed-key-backup
+k8s/sealed-secrets/key.yaml
 
 # editors
 .vscode/

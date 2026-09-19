@@ -3,10 +3,41 @@ CLUSTER  := uptime
 TAG      ?= dev
 IMAGES   := api worker web migrate
 
-.PHONY: kind-up kind-down build load deploy redeploy status logs-% undeploy hadolint scan
+# sealed-secrets: the controller runs in the cluster, kubeseal runs from a docker image.
+# cert.pem is the cluster's public sealing cert and is committed. key.yaml is the private
+# key, gitignored, saved by `make sealed-key-backup` and restored by `make kind-up`.
+SEALED_VERSION := 0.40.0
+SEALED_CERT    := k8s/sealed-secrets/cert.pem
+SEALED_KEY     := k8s/sealed-secrets/key.yaml
+SEALED_KEY_SELECTOR := sealedsecrets.bitnami.com/sealed-secrets-key=active
 
-kind-up:            ## create the kind cluster
+.PHONY: kind-up kind-down build load deploy redeploy status logs-% undeploy hadolint scan \
+        sealed-secrets-up sealed-key-backup seal
+
+kind-up:            ## create the kind cluster and install the sealed-secrets controller
 	kind create cluster --config k8s/kind-config.yaml --wait 120s
+	$(MAKE) sealed-secrets-up
+
+sealed-secrets-up:  ## install the controller. a saved sealing key is restored first, so old SealedSecrets still open
+	@if [ -f $(SEALED_KEY) ]; then kubectl apply -f $(SEALED_KEY); else echo "no saved sealing key at $(SEALED_KEY), the controller will generate one"; fi
+	kubectl apply -f https://github.com/bitnami-labs/sealed-secrets/releases/download/v$(SEALED_VERSION)/controller.yaml
+	kubectl -n kube-system rollout status deployment/sealed-secrets-controller --timeout=120s
+
+sealed-key-backup:  ## save the cluster's sealing key (gitignored) and its public cert (committed)
+	kubectl -n kube-system get secret -l $(SEALED_KEY_SELECTOR) -o json \
+	  | jq '{apiVersion: "v1", kind: "List", items: [.items[] | del(.metadata.resourceVersion, .metadata.uid, .metadata.creationTimestamp, .metadata.managedFields)]}' \
+	  > $(SEALED_KEY)
+	kubectl -n kube-system get secret -l $(SEALED_KEY_SELECTOR) -o jsonpath='{.items[0].data.tls\.crt}' | base64 -d > $(SEALED_CERT)
+	@echo "saved $(SEALED_KEY) and $(SEALED_CERT)"
+
+seal:               ## generate a random database password and seal it for the release overlay. the plaintext is never stored
+	# hex, not base64: api and worker put the password inside a postgresql:// url, and base64's + / = break it
+	openssl rand -hex 24 | tr -d '\n' \
+	  | kubectl create secret generic uptime-db -n uptime --dry-run=client -o yaml --from-file=POSTGRES_PASSWORD=/dev/stdin \
+	  | docker run --rm -i -v $(CURDIR)/$(SEALED_CERT):/cert.pem:ro bitnami/sealed-secrets-kubeseal:$(SEALED_VERSION) \
+	      --cert /cert.pem --format yaml \
+	  > k8s/overlays/release/sealed-secret.yaml
+	@echo "wrote k8s/overlays/release/sealed-secret.yaml"
 
 kind-down:          ## delete the kind cluster
 	kind delete cluster --name $(CLUSTER)

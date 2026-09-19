@@ -194,7 +194,7 @@ a local [kind](https://kind.sigs.k8s.io) cluster and need `kind`, `kubectl` and
 Docker. The Makefile wraps the steps:
 
 ```
-make kind-up     # one node cluster named "uptime", board mapped to localhost:8081
+make kind-up     # one node cluster named "uptime" with the sealed-secrets controller, board on localhost:8081
 make build       # build the four images with the :dev tag
 make load        # copy them into the kind node, no registry involved
 make deploy      # apply k8s/ and wait for everything to roll out
@@ -203,6 +203,8 @@ make logs-worker # follow one service
 make redeploy    # after a code change: build, load, restart the services
 make undeploy    # remove the namespace contents, including the database volume
 make kind-down   # delete the cluster
+make seal        # new random database password, sealed for the release overlay
+make sealed-key-backup  # save the cluster's sealing key so a rebuilt cluster can still open it
 ```
 
 Then open http://localhost:8081. Compose and kind can run side by side, compose
@@ -223,7 +225,8 @@ What is in `k8s/`:
 | `base/worker.yaml`            | 1 replica, no Service, nothing talks to it |
 | `base/web.yaml`               | nginx behind a NodePort Service |
 | `overlays/local/`             | base plus the `:dev` tags of images built on this machine, and a plain Secret generated from the gitignored `secret.env`. what `make deploy` applies |
-| `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline. what ArgoCD will watch |
+| `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline, and the SealedSecret. what ArgoCD will watch |
+| `sealed-secrets/cert.pem`     | the cluster's public sealing cert. committed on purpose, anyone can seal with it and nobody can unseal |
 
 Decisions worth knowing:
 
@@ -238,8 +241,38 @@ Decisions worth knowing:
 - **The base has no Secret.** Every pod reads a Secret named `uptime-db`, and
   each overlay decides how it comes to exist. The local overlay generates a
   plain one from `secret.env`, which is gitignored the same way `.env` is for
-  compose. A committed password, even a demo one, is the first thing a scanner
-  flags on a public repo.
+  compose. The release overlay carries a SealedSecret, see below. A committed
+  password, even a demo one, is the first thing a scanner flags on a public
+  repo.
+
+### Secrets
+
+The release overlay is meant to be applied by a GitOps tool from this repo, so
+its password has to be in git. It is, encrypted, as
+`k8s/overlays/release/sealed-secret.yaml`. The
+[sealed-secrets](https://github.com/bitnami-labs/sealed-secrets) controller in
+the cluster holds the only private key that can open it, and turns it into the
+plain Secret the pods read. Nobody knows the password, including me: `make seal`
+draws 24 random bytes as hex, pipes them through `kubeseal` and writes only
+the encrypted result. Hex because the value ends up inside a `postgresql://`
+URL, where base64's `/` would be read as the start of a path. Postgres and its three clients all read the same Secret, so
+no human ever needs the value.
+
+Two things follow from "only the cluster can open it":
+
+- `k8s/sealed-secrets/cert.pem` is the public half and is committed. Anyone can
+  seal a new value against it without cluster access. `kubeseal` runs from a
+  docker image, nothing is installed.
+- Deleting the cluster deletes the private key, and the committed SealedSecret
+  becomes unreadable. `make sealed-key-backup` saves the key to a gitignored
+  file, and `make kind-up` restores it before the controller starts, so a
+  rebuilt cluster opens the same SealedSecret. A team keeps that backup in a
+  vault. To move the release overlay to a different cluster instead, run
+  `make sealed-key-backup` there and `make seal` again.
+
+Why sealed-secrets and not External Secrets Operator: ESO needs a secret store
+such as Vault or a cloud secret manager to fetch from, which this project does
+not have and would pay for. Sealed-secrets needs nothing but the cluster.
 - **Every container runs as a numeric non-root uid** with a read only root
   filesystem and all capabilities dropped. Distroless names its user `nonroot`,
   and Kubernetes cannot verify a named user, so the worker states uid 65532
