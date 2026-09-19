@@ -15,8 +15,13 @@ permissions:
   contents: read
   pull-requests: read
 
+# pull requests: a new push to the same branch cancels the older run, only the latest matters.
+# pushes to main: every commit is its own group, so nothing is ever queued or cancelled. a
+# run that gets cancelled here is an image that never gets built or pinned, and github keeps
+# at most one queued run per group, so merging three pull requests inside a minute used to
+# lose the middle one.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:

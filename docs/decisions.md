@@ -161,7 +161,20 @@ install.
 
 **Cost.** Turning any of them on later is one line. About 200MB saved now.
 
-## 14. Public repo, public images, no changelog
+## 14. Push runs are grouped by sha, pull request runs by branch
+
+**Situation.** GitHub keeps one running and one queued run per concurrency
+group. With one group per branch, merging three pull requests inside a
+minute cancelled the middle run, and its image was never built or pinned.
+
+**Decision.** Push runs use the commit sha as the group, so every merge
+builds. Pull request runs keep the branch as the group and cancel their older
+sibling, since only the latest push to a pull request matters.
+
+**Cost.** A burst of merges runs several builds at once instead of queueing.
+On the free runner pool that is fine.
+
+## 15. Public repo, public images, no changelog
 
 **Situation.** A portfolio repo exists to be read. Private repos need a
 credential for ArgoCD, a pull secret for the cluster, and a paid plan for

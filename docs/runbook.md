@@ -42,15 +42,16 @@ same overlay lines.
 
 ## A CI run was cancelled
 
-The workflow keeps one running and one queued run per branch. Merging three
-pull requests inside a minute cancels the middle one, shown with an
-exclamation mark on the Actions page. The image from that merge was never
-built or pinned.
+Only pull request runs get cancelled, and only by a newer push to the same
+branch. That is intended: the older run was testing code that no longer
+exists. Nothing needs doing.
 
-Wait until nothing is queued, then open the cancelled run and click "Re-run
-all jobs". It builds the image at that commit and opens its deploy pull
-request. Do not rerun while another run is queued, the rerun joins the same
-queue and cancels it.
+Runs on `main` are never queued or cancelled. Each push has its own
+concurrency group keyed on the commit sha, so a burst of merges runs every
+build in parallel. An earlier version grouped them by branch, and merging
+three pull requests inside a minute cancelled the middle one; its image was
+never built and had to be rerun by hand. If a run on `main` is ever missing
+anyway, open it on the Actions page and click "Re-run all jobs".
 
 ## A deploy pull request has a conflict
 
