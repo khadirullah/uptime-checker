@@ -3,8 +3,8 @@ kind: Kustomization
 resources:
   - ../../base
 # images published by the pipeline. after a merge to main the update-manifests job rewrites
-# newTag for each service that was rebuilt to the short commit sha, and commits this file.
-# that commit is the deploy. argocd will watch this overlay.
+# newTag for each service that was rebuilt to the short commit sha and opens a pull request.
+# merging that pull request is the deploy. argocd will watch this overlay.
 images:
   - name: uptime-checker/api
     newName: ghcr.io/khadirullah/uptime-checker/api

@@ -172,17 +172,13 @@ jobs:
         if: github.event_name == 'push'
         run: echo "${{ steps.meta.outputs.tags }}" | xargs -n1 docker push
 
-  # pin the release overlay to the images just pushed. this commit is the deploy.
-  # the only job that can write to the repository, and only on main.
+  # pin the release overlay to the images just pushed, as a pull request. merging it is the
+  # deploy. a pull request opened with the workflow token would not trigger ci, so this job
+  # uses a fine-grained token scoped to this repository with contents and pull-requests write.
   update-manifests:
     needs: [changes, build]
     if: ${{ !cancelled() && needs.build.result == 'success' && github.event_name == 'push' }}
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    concurrency:
-      group: release-manifests
-      cancel-in-progress: false
     steps:
       - uses: actions/checkout@v7.0.1
       - name: set image tags
@@ -193,16 +189,24 @@ jobs:
               k8s/overlays/release/kustomization.yaml
           done
           git diff
-      - name: commit
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/overlays/release/kustomization.yaml
-          git diff --staged --quiet && { echo "nothing to deploy"; exit 0; }
-          git commit -m "deploy: ${{ needs.changes.outputs.services }} at ${GITHUB_SHA::7}"
-          # another run may have pushed in the meantime
-          for attempt in 1 2 3; do echo "push attempt $attempt"; git push && exit 0; git pull --rebase; done
-          exit 1
+          echo "SHORT=$short" >> "$GITHUB_ENV"
+          echo "SERVICES=$(echo '${{ needs.changes.outputs.services }}' | jq -r 'join(", ")')" >> "$GITHUB_ENV"
+      - name: open deploy pull request
+        # does nothing when the overlay is unchanged, so a run that rebuilt nothing opens nothing
+        uses: peter-evans/create-pull-request@v8.1.1
+        with:
+          token: ${{ secrets.DEPLOY_PR_TOKEN }}
+          add-paths: k8s/overlays/release/kustomization.yaml
+          branch: deploy/${{ env.SHORT }}
+          delete-branch: true
+          commit-message: "deploy: ${{ env.SERVICES }} at ${{ env.SHORT }}"
+          title: "deploy: ${{ env.SERVICES }} at ${{ env.SHORT }}"
+          body: |
+            Pins the release overlay to the images built and scanned from ${{ github.sha }}.
+
+            Services: ${{ env.SERVICES }}
+
+            Merging this pull request is the deploy.
 
   # one check for branch protection to require. green only if nothing above failed.
   ci-ok:

@@ -245,8 +245,9 @@ Decisions worth knowing:
 - **Image tags live in the overlays, not the base.** The local overlay points
   at `uptime-checker/<service>:dev`, which is what `make build` produces. The
   release overlay points at `ghcr.io/khadirullah/uptime-checker/<service>` at a
-  commit sha. A deploy is the pipeline changing that sha and committing it. The
-  two never collide, so a pipeline run does not break the local loop.
+  commit sha. A deploy is the pipeline changing that sha in a pull request and
+  someone merging it. The two never collide, so a pipeline run does not break
+  the local loop.
 
 ## Tests
 
@@ -288,7 +289,7 @@ graph LR
     ta["test-api<br/>flake8, pytest, coverage gate"]
     tw["test-worker<br/>gofmt, vet, test -race"]
     b["build, one per changed service<br/>hadolint, build once, trivy, push"]
-    um["update-manifests<br/>pin release overlay to the sha, commit"]
+    um["update-manifests<br/>pin release overlay to the sha, open a pull request"]
     ok["ci-ok<br/>the one check branch protection requires"]
 
     changes --> ta --> b
@@ -316,15 +317,17 @@ What each stage does and why it is shaped that way:
   can do about it. The two alpine images run `apk upgrade` at build time for
   the same reason: the upstream images lag alpine's fixes by days to weeks.
 - **Least permission.** The workflow token can only read the repository and
-  its pull requests. `build` adds
-  `packages: write` to push images. `update-manifests` adds `contents: write`
-  to commit the overlay, and it is the only job that can, and only on `main`.
-  Pull requests never push anything.
-- **The deploy is a commit.** After a push to `main`, `update-manifests`
+  its pull requests. `build` adds `packages: write` to push images, and only
+  on `main`. Nothing in the workflow can write to the repository with that
+  token. Pull requests never push anything.
+- **The deploy is a pull request.** After a push to `main`, `update-manifests`
   rewrites `newTag` in `k8s/overlays/release/kustomization.yaml` for each
-  service that was rebuilt and commits it. That commit is what ArgoCD will
-  pick up. Pushes made with the workflow token do not trigger workflows, so
-  this cannot loop.
+  service that was rebuilt and opens a pull request with the change. It uses
+  a fine-grained token scoped to this repository, stored as the
+  `DEPLOY_PR_TOKEN` secret, because a pull request opened with the workflow
+  token would not trigger CI. The pull request runs through `ci-ok` like any
+  other, and merging it is the deploy. That merge is what ArgoCD will pick up,
+  and it builds nothing because only `k8s/` changed, so it cannot loop.
 - **One required check.** `ci-ok` is green only if no job failed or was
   cancelled, and skipped jobs count as fine. Branch protection on `main` needs
   to require just that one check, however many matrix jobs ran.
