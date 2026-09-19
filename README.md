@@ -216,14 +216,13 @@ What is in `k8s/`:
 | `base/kustomization.yaml`     | namespace and the resource list. no image tags |
 | `base/namespace.yaml`         | everything lives in `uptime` |
 | `base/configmap.yaml`         | non-secret settings, same names as `.env.example` |
-| `base/secret.yaml`            | the database password. demo value, replaced by a SealedSecret later |
 | `base/postgres.yaml`          | StatefulSet with a 1Gi volume claim and a headless Service |
 | `base/redis.yaml`             | Deployment, no persistence, the queue and cache rebuild themselves |
 | `base/migrate-job.yaml`       | Job that applies the migrations before the services start |
 | `base/api.yaml`               | 2 replicas, liveness on `/healthz`, readiness on `/readyz` |
 | `base/worker.yaml`            | 1 replica, no Service, nothing talks to it |
 | `base/web.yaml`               | nginx behind a NodePort Service |
-| `overlays/local/`             | base plus the `:dev` tags of images built on this machine. what `make deploy` applies |
+| `overlays/local/`             | base plus the `:dev` tags of images built on this machine, and a plain Secret generated from the gitignored `secret.env`. what `make deploy` applies |
 | `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline. what ArgoCD will watch |
 
 Decisions worth knowing:
@@ -236,6 +235,11 @@ Decisions worth knowing:
 - **The database URL is assembled in the pod spec** from ConfigMap values plus
   the password from the Secret, using `$(VAR)` expansion. The password exists in
   exactly one place.
+- **The base has no Secret.** Every pod reads a Secret named `uptime-db`, and
+  each overlay decides how it comes to exist. The local overlay generates a
+  plain one from `secret.env`, which is gitignored the same way `.env` is for
+  compose. A committed password, even a demo one, is the first thing a scanner
+  flags on a public repo.
 - **Every container runs as a numeric non-root uid** with a read only root
   filesystem and all capabilities dropped. Distroless names its user `nonroot`,
   and Kubernetes cannot verify a named user, so the worker states uid 65532

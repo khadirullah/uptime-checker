@@ -19,6 +19,7 @@ load:               ## copy the images into the kind node (no registry needed)
 	@for s in $(IMAGES); do kind load docker-image uptime-checker/$$s:$(TAG) --name $(CLUSTER) || exit 1; done
 
 deploy:             ## apply the manifests (a Job is immutable, so drop the old one first)
+	@test -f k8s/overlays/local/secret.env || cp k8s/overlays/local/secret.env.example k8s/overlays/local/secret.env
 	kubectl -n uptime delete job migrate --ignore-not-found
 	kubectl apply -k k8s/overlays/local
 	kubectl -n uptime rollout status statefulset/postgres --timeout=120s

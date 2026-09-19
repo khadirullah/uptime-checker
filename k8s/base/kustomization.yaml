@@ -6,10 +6,12 @@ namespace: uptime
 # the resources only. image names and tags are set by the overlays:
 #   overlays/local    images built on this machine and loaded into kind (make build load)
 #   overlays/release  images the pipeline pushed to ghcr, pinned to a commit
+# the database password is not here either. every pod reads a Secret named uptime-db, and
+# each overlay decides how that Secret comes to exist: local generates a plain one from a
+# gitignored file, release carries a SealedSecret.
 resources:
   - namespace.yaml
   - configmap.yaml
-  - secret.yaml
   - postgres.yaml
   - redis.yaml
   - migrate-job.yaml

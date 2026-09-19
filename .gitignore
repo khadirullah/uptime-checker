@@ -13,6 +13,7 @@ worker/*.test
 
 # local env
 .env
+k8s/overlays/local/secret.env
 
 # editors
 .vscode/
