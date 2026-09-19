@@ -3,7 +3,7 @@ module github.com/khadirullah/uptime-checker/worker
 go 1.26
 
 require (
-	github.com/jackc/pgx/v5 v5.10.0
+	github.com/jackc/pgx/v5 v5.11.0
 	github.com/redis/go-redis/v9 v9.22.0
 )
 
