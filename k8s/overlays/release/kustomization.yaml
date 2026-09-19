@@ -11,7 +11,7 @@ images:
     newTag: 9bd2465
   - name: uptime-checker/worker
     newName: ghcr.io/khadirullah/uptime-checker/worker
-    newTag: 9bd2465
+    newTag: 64ab785
   - name: uptime-checker/web
     newName: ghcr.io/khadirullah/uptime-checker/web
     newTag: 9bd2465
