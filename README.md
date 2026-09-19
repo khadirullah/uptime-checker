@@ -7,6 +7,10 @@ Built as the application workload for a DevSecOps pipeline project. The app is
 deliberately small. The interesting part is running it: three services in two
 languages, a database, a queue, and everything that needs around them.
 
+Status: the pipeline, sealed secrets and network policies are in. ArgoCD
+watching the release overlay and an autoscaler on the api are landing next,
+and the docs will be reshaped around them once they do.
+
 ## Services
 
 | Service  | Language        | Job |
@@ -415,6 +419,30 @@ with the short commit sha, plus `latest` on `main`.
 `.github/dependabot.yml` opens weekly pull requests for pip, Go modules, the
 four base images and the actions. Each one runs through the pipeline, so a
 bumped base image is scanned before it is merged.
+
+## How this maps to a real team
+
+This repo is public, runs on one laptop, and has one contributor. A company
+setup differs in known places, and each one is a swap, not a redesign:
+
+- **The repo is private.** Nearly every company repo is. Three things change.
+  ArgoCD needs a repository credential, a read-only deploy key or a token
+  stored in its namespace. The cluster needs an image pull secret for GHCR,
+  referenced by every pod. And branch rules need a paid plan on GitHub, since
+  rulesets are not enforced on free private repos.
+- **Secrets come from a store.** Sealed-secrets is the right tool when the
+  cluster is the only thing you have. With Vault or a cloud secret manager, the
+  External Secrets Operator replaces it: the repo holds a reference, the
+  operator fetches the value at runtime, and rotation happens in the store.
+- **The cluster is managed.** kind stands in for EKS, GKE or AKS. Everything in
+  `k8s/` is plain Kubernetes and moves unchanged, except that a managed CNI
+  enforces network policies without the extra daemonset kind needs.
+- **The deploy token is an app.** The fine-grained token behind the deploy pull
+  request expires yearly. A team uses a GitHub App for the same job, which
+  does not expire and shows up as its own identity in the audit log.
+- **Images live in the company registry**, which scans on push. Trivy in the
+  pipeline stays, since failing the build is earlier and cheaper than an alert
+  after the push.
 
 ## Layout
 
