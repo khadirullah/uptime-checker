@@ -7,9 +7,9 @@ Built as the application workload for a DevSecOps pipeline project. The app is
 deliberately small. The interesting part is running it: three services in two
 languages, a database, a queue, and everything that needs around them.
 
-Status: the application, the pipeline, sealed secrets, network policies,
-ArgoCD and autoscaling are in. What remains is writing, the decision records
-and the runbook under `docs/`.
+Two more documents live in `docs/`. [decisions.md](docs/decisions.md) records
+why each part is the way it is, and [runbook.md](docs/runbook.md) has the
+commands for every operation this repo has needed so far.
 
 ## Services
 
@@ -504,6 +504,7 @@ setup differs in known places, and each one is a swap, not a redesign:
 ## Layout
 
 ```
+docs/           decision records and the runbook
 .github/        the pipeline and dependabot config
 api/            FastAPI service, tests, Dockerfile
 worker/         Go service, tests, Dockerfile
