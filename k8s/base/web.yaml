@@ -9,7 +9,7 @@ spec:
   ports:
     - port: 8080
       targetPort: http
-      nodePort: 30080   # kind maps this to localhost:8081, see kind-config.yaml
+      nodePort: 30080   # release: kind maps this to localhost:8081. the local overlay patches it to 30081
       name: http
 ---
 apiVersion: apps/v1

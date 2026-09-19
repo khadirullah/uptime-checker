@@ -2,6 +2,7 @@
 CLUSTER  := uptime
 TAG      ?= dev
 IMAGES   := api worker web migrate
+NS       := uptime-dev   # the local overlay's namespace. argocd owns `uptime` on the same cluster.
 
 # sealed-secrets: the controller runs in the cluster, kubeseal runs from a docker image.
 # cert.pem is the cluster's public sealing cert and is committed. key.yaml is the private
@@ -60,24 +61,24 @@ load:               ## copy the images into the kind node (no registry needed)
 
 deploy:             ## apply the manifests (a Job is immutable, so drop the old one first)
 	@test -f k8s/overlays/local/secret.env || cp k8s/overlays/local/secret.env.example k8s/overlays/local/secret.env
-	kubectl -n uptime delete job migrate --ignore-not-found
+	kubectl -n $(NS) delete job migrate --ignore-not-found
 	kubectl apply -k k8s/overlays/local
-	kubectl -n uptime rollout status statefulset/postgres --timeout=120s
-	kubectl -n uptime wait --for=condition=complete job/migrate --timeout=120s
-	kubectl -n uptime rollout status deployment/api deployment/worker deployment/web --timeout=120s
+	kubectl -n $(NS) rollout status statefulset/postgres --timeout=120s
+	kubectl -n $(NS) wait --for=condition=complete job/migrate --timeout=120s
+	kubectl -n $(NS) rollout status deployment/api deployment/worker deployment/web --timeout=120s
 
 redeploy: build load  ## rebuild, reload, and restart the services
-	kubectl -n uptime rollout restart deployment/api deployment/worker deployment/web
-	kubectl -n uptime rollout status deployment/api deployment/worker deployment/web --timeout=120s
+	kubectl -n $(NS) rollout restart deployment/api deployment/worker deployment/web
+	kubectl -n $(NS) rollout status deployment/api deployment/worker deployment/web --timeout=120s
 
 undeploy:           ## remove everything in the namespace, including the database volume
 	kubectl delete -k k8s/overlays/local --ignore-not-found
 
 status:             ## pods, services and jobs in the namespace
-	kubectl -n uptime get pods,svc,jobs,pvc
+	kubectl -n $(NS) get pods,svc,jobs,pvc
 
 logs-%:             ## follow logs for one service, e.g. make logs-worker
-	kubectl -n uptime logs -f deployment/$* --all-containers
+	kubectl -n $(NS) logs -f deployment/$* --all-containers
 
 # the two image gates from the pipeline, runnable here before pushing. both use docker
 # images so nothing needs installing. trivy keeps its database in a named volume.

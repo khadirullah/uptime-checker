@@ -1,12 +1,23 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
-# the base sets this too, but only for its own resources. the Secret generated below
-# needs it here or it lands in default.
-namespace: uptime
+# the local loop gets its own namespace and nodeport, so it can run next to the release
+# overlay that argocd deploys into `uptime` on the same cluster. kustomize renames the
+# Namespace object from the base as well as stamping every resource, and the generated
+# Secret below needs the field too or it lands in default.
+namespace: uptime-dev
 
 resources:
   - ../../base
+
+patches:
+  - patch: |
+      - op: replace
+        path: /spec/ports/0/nodePort
+        value: 30081   # kind maps this to localhost:8082, see kind-config.yaml
+    target:
+      kind: Service
+      name: web
 
 # images built locally with `make build` and copied into the kind node with `make load`
 images:

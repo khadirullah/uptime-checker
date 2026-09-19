@@ -199,7 +199,7 @@ a local [kind](https://kind.sigs.k8s.io) cluster and need `kind`, `kubectl` and
 Docker. The Makefile wraps the steps:
 
 ```
-make kind-up     # one node cluster named "uptime", policy enforcement and sealed-secrets installed, board on localhost:8081
+make kind-up     # one node cluster named "uptime" with policy enforcement and sealed-secrets installed
 make build       # build the four images with the :dev tag
 make load        # copy them into the kind node, no registry involved
 make deploy      # apply k8s/ and wait for everything to roll out
@@ -212,16 +212,18 @@ make seal        # new random database password, sealed for the release overlay
 make sealed-key-backup  # save the cluster's sealing key so a rebuilt cluster can still open it
 ```
 
-Then open http://localhost:8081. Compose and kind can run side by side, compose
-stays on 8080.
+Then open http://localhost:8082. That is the local overlay in namespace
+`uptime-dev`. The release overlay, the one ArgoCD deploys from `main`, runs in
+namespace `uptime` on the same cluster and answers on http://localhost:8081.
+Compose stays on 8080, so all three can run side by side.
 
 What is in `k8s/`:
 
 | File                          | What it does |
 |-------------------------------|--------------|
-| `kind-config.yaml`            | single node, NodePort 30080 mapped to localhost:8081 |
+| `kind-config.yaml`            | single node. NodePort 30080 to localhost:8081 for release, 30081 to localhost:8082 for local |
 | `base/kustomization.yaml`     | namespace and the resource list. no image tags |
-| `base/namespace.yaml`         | everything lives in `uptime` |
+| `base/namespace.yaml`         | `uptime`. the local overlay renames it to `uptime-dev` |
 | `base/configmap.yaml`         | non-secret settings, same names as `.env.example` |
 | `base/postgres.yaml`          | StatefulSet with a 1Gi volume claim and a headless Service |
 | `base/redis.yaml`             | Deployment, no persistence, the queue and cache rebuild themselves |

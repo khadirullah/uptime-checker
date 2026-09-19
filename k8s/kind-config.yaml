@@ -1,5 +1,8 @@
 # single node cluster for a small machine.
-# the web service is a NodePort on 30080, mapped to localhost:8081 (compose keeps 8080).
+# two nodeports, one per namespace on this cluster:
+#   30080 -> localhost:8081  the release overlay in namespace uptime, deployed by argocd
+#   30081 -> localhost:8082  the local overlay in namespace uptime-dev, deployed by make deploy
+# compose keeps 8080.
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 name: uptime
@@ -8,4 +11,7 @@ nodes:
     extraPortMappings:
       - containerPort: 30080
         hostPort: 8081
+        protocol: TCP
+      - containerPort: 30081
+        hostPort: 8082
         protocol: TCP
