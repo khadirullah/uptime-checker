@@ -1,10 +1,17 @@
 # applies db/migrations against postgres, once per deploy.
 # the sql is idempotent (IF NOT EXISTS), so re-running is safe. a Job is immutable, so
-# `make deploy` deletes the previous one before applying; argocd does the same with a hook.
+# `make deploy` deletes the previous one before applying. argocd does the same through the
+# annotations below: a Sync hook in wave 1, deleted before each new run. it is not a PreSync
+# hook because on a first install postgres does not exist until the Sync phase, and a PreSync
+# job would wait for it forever. wave 0 is the stores, wave 1 is this, wave 2 is the services.
 apiVersion: batch/v1
 kind: Job
 metadata:
   name: migrate
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation
+    argocd.argoproj.io/sync-wave: "1"
 spec:
   backoffLimit: 6
   ttlSecondsAfterFinished: 600

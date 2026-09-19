@@ -312,7 +312,13 @@ Two things worth knowing:
   and Kubernetes cannot verify a named user, so the worker states uid 65532
   explicitly.
 - **Jobs are immutable**, so `make deploy` deletes the previous migrate Job
-  before applying. The pipeline will do the same through an ArgoCD hook.
+  before applying. ArgoCD does the same through annotations on the Job: it is
+  a `Sync` hook with `hook-delete-policy: BeforeHookCreation`, so every sync
+  deletes the old Job and runs a fresh one. Sync waves give the order: the
+  stores in wave 0, migrate in wave 1, api, worker and web in wave 2, and
+  ArgoCD waits for each wave to be healthy before starting the next. It is not
+  a `PreSync` hook on purpose. On a first install Postgres does not exist
+  until the Sync phase, and a PreSync migrate would wait for it forever.
 - **Image tags live in the overlays, not the base.** The local overlay points
   at `uptime-checker/<service>:dev`, which is what `make build` produces. The
   release overlay points at `ghcr.io/khadirullah/uptime-checker/<service>` at a

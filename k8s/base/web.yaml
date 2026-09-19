@@ -16,6 +16,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: web
+  annotations:
+    argocd.argoproj.io/sync-wave: "2"   # after the migrate job (wave 1) has finished
 spec:
   replicas: 1
   selector:
