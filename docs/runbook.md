@@ -149,8 +149,11 @@ clean start.
 
 ## The autoscaler does nothing
 
+Everything below uses `uptime-dev`, the local overlay. For the release
+namespace read `uptime`; the autoscaler is the same.
+
 ```
-kubectl top pods -n uptime
+kubectl top pods -n uptime-dev
 ```
 
 "Metrics API not available" means metrics-server is missing or unhealthy:
@@ -173,16 +176,76 @@ Up within a minute, down about seventy seconds after the load stops.
 
 Test from a long-lived pod, never a one-shot one. A pod that probes in its
 first moments can race the enforcer learning its IP and report a connection
-that would be dropped a moment later.
+that would be dropped a moment later. Shown for `uptime-dev`; the policies
+are identical in `uptime`.
 
 ```
-kubectl -n uptime run probe --image=busybox:1.37 --restart=Never --labels=app=web --command -- sleep 600
-kubectl -n uptime exec probe -- nc -z -w 4 api 8000 && echo allowed || echo blocked
-kubectl -n uptime delete pod probe
+kubectl -n uptime-dev run probe --image=busybox:1.37 --restart=Never --labels=app=web --command -- sleep 600
+kubectl -n uptime-dev exec probe -- nc -z -w 4 api 8000 && echo allowed || echo blocked
+kubectl -n uptime-dev delete pod probe
 ```
 
 The label decides which policy applies. The enforcer logs every verdict:
 `kubectl -n kube-system logs ds/kube-network-policies --tail=20`.
+
+## Roll back a bad deploy
+
+Self heal is on, so `kubectl rollout undo` is reverted within minutes. The
+release overlay on `main` is the only thing that decides what runs. Two ways
+back:
+
+- Revert the deploy pull request's merge commit on a branch, open a pull
+  request, merge. ArgoCD rolls the affected services back to the previous
+  tag. This is the normal path.
+- Edit `k8s/overlays/release/kustomization.yaml` by hand to any tag that
+  exists in GHCR, same branch and pull request flow. Useful when the previous
+  tag is several deploys back.
+
+Either way the migrate job runs again on the sync. Migrations are idempotent
+and only add, so an older image runs fine against a newer schema.
+
+## Add a migration
+
+Drop a new file in `db/migrations/`, named so it sorts after the existing ones,
+for example `002_add_index.sql`. Two rules, both enforced by nothing but
+review:
+
+- Every statement must be safe to run twice, `IF NOT EXISTS` and friends.
+  The job runs on every deploy and on every ArgoCD sync.
+- Only add. Dropping a column breaks the previous image, which is what a
+  rollback deploys.
+
+A change under `db/` rebuilds the migrate image, and the deploy pull request
+pins it. On the local overlay, `make deploy` runs it immediately.
+
+If the job fails, `kubectl -n uptime-dev logs job/migrate` has the SQL error.
+Fix the file and `make deploy` again; the job is deleted and recreated each
+time.
+
+## The local code loop
+
+```
+make redeploy          # rebuild the four images, load them, restart the services
+make logs-worker       # follow one service
+make undeploy          # delete the namespace, including the database volume
+make hadolint scan     # the two image gates the pipeline runs, before pushing
+```
+
+Compose is the other local loop, without Kubernetes: `docker compose up
+--build`, board on localhost:8080. The README covers it.
+
+## Back up the database
+
+The check history lives in the `data-postgres-0` volume claim. On kind it is
+a directory on the node container and dies with the cluster. To keep it:
+
+```
+kubectl -n uptime exec postgres-0 -- pg_dump -U uptime uptime > backup.sql
+kubectl -n uptime exec -i postgres-0 -- psql -U uptime uptime < backup.sql
+```
+
+The second line restores into an already migrated database, so run it after
+the migrate job has completed.
 
 ## Rebuild the cluster
 
