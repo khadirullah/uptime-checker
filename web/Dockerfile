@@ -1,4 +1,4 @@
-FROM nginxinc/nginx-unprivileged:1.29-alpine
+FROM nginxinc/nginx-unprivileged:1.31-alpine
 # the base image lags alpine's package fixes by days to weeks. upgrading at build time keeps
 # the image scan clean instead of waiting for the next upstream rebuild.
 USER 0
