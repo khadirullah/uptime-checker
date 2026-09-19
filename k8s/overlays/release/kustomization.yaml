@@ -14,7 +14,7 @@ images:
     newTag: 64ab785
   - name: uptime-checker/web
     newName: ghcr.io/khadirullah/uptime-checker/web
-    newTag: 9bd2465
+    newTag: e1cc326
   - name: uptime-checker/migrate
     newName: ghcr.io/khadirullah/uptime-checker/migrate
     newTag: 9bd2465
