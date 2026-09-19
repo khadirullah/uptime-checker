@@ -174,7 +174,83 @@ sibling, since only the latest push to a pull request matters.
 **Cost.** A burst of merges runs several builds at once instead of queueing.
 On the free runner pool that is fine.
 
-## 15. Public repo, public images, no changelog
+## 15. The migrate image is alpine plus the postgres client
+
+**Situation.** The migration job needs `psql` and nothing else. The
+`postgres:18-alpine` image is 433MB.
+
+**Decision.** `alpine` plus `postgresql18-client`, 21MB, with `apk upgrade` at
+build time so the scan stays clean between upstream rebuilds.
+
+**Cost.** A second alpine version to track. Dependabot watches it.
+
+## 16. Distroless for the worker, nginx-unprivileged for the web
+
+**Situation.** The worker is a static Go binary. nginx's stock image starts as
+root and drops privileges itself, which Kubernetes cannot verify.
+
+**Decision.** The worker ships on `gcr.io/distroless/static`, no shell, no
+package manager. The web image is `nginxinc/nginx-unprivileged`, which listens
+on 8080 and runs as its own user from the start.
+
+**Cost.** No shell in the worker means `kubectl exec` debugging happens from a
+separate probe pod. That is the point.
+
+## 17. Numeric uids, stated in the manifest
+
+**Situation.** `runAsNonRoot: true` makes the kubelet verify the uid, and it
+cannot verify a named user like distroless's `nonroot`.
+
+**Decision.** api runs as 10001, migrate as 10002, worker as 65532, all set
+in the Dockerfile and stated numerically where the kubelet needs it.
+
+**Cost.** A number to keep in sync between Dockerfile and manifest.
+
+## 18. Liveness and readiness are different endpoints
+
+**Situation.** Wiring both probes to one endpoint that checks the database
+turns a database blip into a restart storm.
+
+**Decision.** `/healthz` only says the process is alive. `/readyz` checks
+Postgres and Redis. When the database goes away, api pods drop out of the
+Service and come back when it returns, with zero restarts. The worker has no
+probes yet; it retries its stores at startup and the fix, a small health
+endpoint, is noted in its manifest.
+
+**Cost.** Two endpoints instead of one.
+
+## 19. Postgres behind a headless Service, Redis without persistence
+
+**Situation.** One Postgres replica in a StatefulSet, one Redis holding a queue
+and a cache.
+
+**Decision.** The Postgres Service has no cluster IP, so the pod gets a stable
+DNS name of its own. Redis has no volume: the queue refills on the next
+scheduler tick and the status cache is rebuilt from Postgres.
+
+**Cost.** A Redis restart loses at most one minute of checks.
+
+## 20. Memory limits only
+
+**Situation.** The autoscaler reads CPU usage against the 50m request.
+
+**Decision.** Every container has a memory limit and no CPU limit. CPU
+throttling would distort the very number the autoscaler scales on.
+
+**Cost.** A runaway container can take CPU from its neighbours. On one node
+with requests set, the scheduler still keeps the sum honest.
+
+## 21. Actions pinned to version tags, not commit shas
+
+**Situation.** A tag can be moved by the action's maintainer; a sha cannot.
+
+**Decision.** Version tags, with Dependabot bumping them weekly. Readable
+diffs won over the last step of supply-chain rigour for a one-person repo.
+
+**Cost.** A compromised upstream tag would be pulled on the next run. Moving
+to shas is a find and replace and a Dependabot setting.
+
+## 22. Public repo, public images, no changelog
 
 **Situation.** A portfolio repo exists to be read. Private repos need a
 credential for ArgoCD, a pull secret for the cluster, and a paid plan for

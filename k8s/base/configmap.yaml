@@ -1,5 +1,6 @@
 # non-secret settings shared by the services.
-# the same names as .env.example, so compose and kubernetes read one vocabulary.
+# the same names as .env.example, plus POSTGRES_HOST and REDIS_URL, which compose builds
+# inline. compose and kubernetes read one vocabulary.
 apiVersion: v1
 kind: ConfigMap
 metadata:

@@ -39,7 +39,7 @@ graph LR
 
     sites(["monitored sites<br/>on the internet"])
 
-    browser -->|"GET / every 5s"| web
+    browser -->|"GET /api/sites every 5s"| web
     web -->|"proxy /api/"| api
     api -->|"sites, history"| postgres
     api -->|"read status, enqueue new site"| redis
@@ -177,7 +177,9 @@ Environment variables, all optional:
 | `DATABASE_URL`           | `postgresql://uptime:uptime@localhost:5432/uptime` | api, worker |
 | `REDIS_URL`              | `redis://localhost:6379/0`                         | api, worker |
 | `CHECK_INTERVAL_SECONDS` | `60`                                               | worker, api (display only) |
-| `HTTP_TIMEOUT_SECONDS`   | `10`                                               | worker |
+| `HTTP_TIMEOUT_SECONDS`   | `10`                                               | worker. the api also receives it through the ConfigMap and ignores it |
+| `POSTGRES_HOST`          | `postgres`                                         | migrate, and the pod specs that assemble `DATABASE_URL` from it |
+| `PGPASSWORD`             | from the Secret                                    | migrate, read by psql |
 | `WEB_PORT`               | `8080`                                             | compose only, host port for the board |
 
 ## API
@@ -187,10 +189,10 @@ Environment variables, all optional:
 | GET    | `/healthz`                    | liveness. touches nothing, always 200 while the process runs |
 | GET    | `/readyz`                     | readiness. 503 with details if Postgres or Redis is unreachable |
 | GET    | `/api/sites`                  | all sites with their latest status, plus the check interval |
-| POST   | `/api/sites`                  | `{"url": "...", "name": "optional"}`. 409 if the url exists |
-| GET    | `/api/sites/{id}`             | one site with status |
-| DELETE | `/api/sites/{id}`             | removes the site and its history |
-| GET    | `/api/sites/{id}/checks`      | history, newest first. `?limit=` up to 500 |
+| POST   | `/api/sites`                  | `{"url": "...", "name": "optional"}`. 201 on success, 409 if the url exists, 422 if it is not http or https |
+| GET    | `/api/sites/{id}`             | one site with status. 404 if unknown |
+| DELETE | `/api/sites/{id}`             | removes the site and its history. 204 on success, 404 if unknown |
+| GET    | `/api/sites/{id}/checks`      | history, newest first. `?limit=` defaults to 50, up to 500. 404 if unknown |
 
 ## Run on Kubernetes
 
@@ -213,6 +215,12 @@ make sealed-key-backup  # save the cluster's sealing key so a rebuilt cluster ca
 make argocd-ui   # port-forward the argocd ui to localhost:8083
 ```
 
+`make kind-up` is four installs in a row, and each is its own target for when
+one component needs reinstalling without a new cluster: `network-policies-up`,
+`sealed-secrets-up`, `metrics-server-up`, `argocd-up`, then `argocd-app` to
+register the Application. `TAG=dev` is the image tag every target assumes and
+can be overridden, `make build load TAG=test`.
+
 Then open http://localhost:8082. That is the local overlay in namespace
 `uptime-dev`. The release overlay, the one ArgoCD deploys from `main`, runs in
 namespace `uptime` on the same cluster and answers on http://localhost:8081.
@@ -225,7 +233,7 @@ What is in `k8s/`:
 | `kind-config.yaml`            | single node. NodePort 30080 to localhost:8081 for release, 30081 to localhost:8082 for local |
 | `base/kustomization.yaml`     | namespace and the resource list. no image tags |
 | `base/namespace.yaml`         | `uptime`. the local overlay renames it to `uptime-dev` |
-| `base/configmap.yaml`         | non-secret settings, same names as `.env.example` |
+| `base/configmap.yaml`         | non-secret settings. the `.env.example` names plus `POSTGRES_HOST` and `REDIS_URL`, which compose builds inline |
 | `base/postgres.yaml`          | StatefulSet with a 1Gi volume claim and a headless Service |
 | `base/redis.yaml`             | Deployment, no persistence, the queue and cache rebuild themselves |
 | `base/migrate-job.yaml`       | Job that applies the migrations before the services start |
@@ -235,8 +243,10 @@ What is in `k8s/`:
 | `base/web.yaml`               | nginx behind a NodePort Service |
 | `base/network-policies.yaml`  | default deny, then one allow per arrow in the architecture diagram |
 | `overlays/local/`             | base plus the `:dev` tags of images built on this machine, and a plain Secret generated from the gitignored `secret.env`. what `make deploy` applies |
-| `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline, and the SealedSecret. what ArgoCD will watch |
+| `overlays/local/secret.env.example` | the demo password. `make deploy` copies it to `secret.env` the first time |
+| `overlays/release/`           | base plus the GHCR image names, pinned to a commit by the pipeline, and the SealedSecret. what ArgoCD watches |
 | `sealed-secrets/cert.pem`     | the cluster's public sealing cert. committed on purpose, anyone can seal with it and nobody can unseal |
+| `sealed-secrets/key.yaml`     | the private key, gitignored. written by `make sealed-key-backup`, restored by `make kind-up` |
 | `argocd/install/`             | argocd itself, pinned, with the unused controllers scaled to zero |
 | `argocd/application.yaml`     | the one Application: release overlay on `main` into namespace `uptime`, automated sync |
 | `metrics-server/`             | metrics-server, pinned, with the one flag kind needs |
@@ -257,6 +267,29 @@ Decisions worth knowing:
   compose. The release overlay carries a SealedSecret, see below. A committed
   password, even a demo one, is the first thing a scanner flags on a public
   repo.
+- **The four first-party containers run as a numeric non-root uid** with a
+  read only root filesystem and all capabilities dropped. Distroless names its
+  user `nonroot`, and Kubernetes cannot verify a named user, so the worker
+  states uid 65532 explicitly. The two stock images are looser on purpose:
+  Postgres needs a writable data directory and its own uid handling, and Redis
+  drops capabilities but keeps a writable root. What is deliberately not done
+  yet: no CPU limits anywhere, only memory, because CPU throttling would
+  distort the autoscaler that reads the 50m request; no seccomp profile; and
+  no Pod Security Admission labels on the namespace.
+- **Jobs are immutable**, so `make deploy` deletes the previous migrate Job
+  before applying. ArgoCD does the same through annotations on the Job: it is
+  a `Sync` hook with `hook-delete-policy: BeforeHookCreation`, so every sync
+  deletes the old Job and runs a fresh one. Sync waves give the order: the
+  stores in wave 0, migrate in wave 1, api, worker and web in wave 2, and
+  ArgoCD waits for each wave to be healthy before starting the next. It is not
+  a `PreSync` hook on purpose. On a first install Postgres does not exist
+  until the Sync phase, and a PreSync migrate would wait for it forever.
+- **Image tags live in the overlays, not the base.** The local overlay points
+  at `uptime-checker/<service>:dev`, which is what `make build` produces. The
+  release overlay points at `ghcr.io/khadirullah/uptime-checker/<service>` at a
+  commit sha. A deploy is the pipeline changing that sha in a pull request and
+  someone merging it. The two never collide, so a pipeline run does not break
+  the local loop.
 
 ### Secrets
 
@@ -270,6 +303,20 @@ draws 24 random bytes as hex, pipes them through `kubeseal` and writes only
 the encrypted result. Hex because the value ends up inside a `postgresql://`
 URL, where base64's `/` would be read as the start of a path. Postgres and its three clients all read the same Secret, so
 no human ever needs the value.
+
+```mermaid
+graph LR
+    seal["make seal<br/>openssl rand -hex 24"] --> kubeseal["kubeseal --cert<br/>docker image, offline"]
+    cert["cert.pem<br/>public, committed"] --> kubeseal
+    kubeseal --> ss["sealed-secret.yaml<br/>encrypted, committed"]
+    ss -->|"argocd applies"| ctrl["sealed-secrets controller<br/>holds the private key"]
+    key["key.yaml<br/>private, gitignored,<br/>restored on cluster rebuild"] -.-> ctrl
+    ctrl --> secret["Secret uptime-db"]
+    secret --> postgres["postgres"]
+    secret --> api["api"]
+    secret --> worker["worker"]
+    secret --> migrate["migrate"]
+```
 
 Two things follow from "only the cluster can open it":
 
@@ -295,7 +342,7 @@ architecture diagram and nothing else:
 
 | Pod      | May be reached by            | May reach |
 |----------|------------------------------|-----------|
-| web      | anyone, on 8080 (the NodePort) | api on 8000 |
+| web      | anyone, on 8080, which is where the NodePort lands | api on 8000 |
 | api      | web, on 8000                 | postgres on 5432, redis on 6379 |
 | worker   | nobody                       | postgres, redis, and the internet on 80 and 443 |
 | migrate  | nobody                       | postgres on 5432 |
@@ -303,8 +350,39 @@ architecture diagram and nothing else:
 | redis    | api, worker on 6379          | nothing |
 
 Every pod may also reach CoreDNS, since services are names. "The internet" for
-the worker is `0.0.0.0/0` minus the private ranges, so a site URL pointing at
-the cluster or the host network is refused.
+the worker is `0.0.0.0/0` minus the private ranges and link-local, so a site
+URL pointing at the cluster, the host network or a cloud metadata endpoint is
+refused.
+
+The same table as a picture. Solid arrows are the only connections allowed,
+anything not drawn is dropped:
+
+```mermaid
+graph LR
+    internet(["internet"])
+    nodeport(["nodeport"])
+    subgraph ns ["namespace uptime, default deny both ways"]
+        web["web"]
+        api["api"]
+        worker["worker"]
+        migrate["migrate"]
+        postgres[("postgres")]
+        redis[("redis")]
+    end
+    dns["coredns"]
+    nodeport -->|"8080"| web
+    web -->|"8000"| api
+    api -->|"5432"| postgres
+    api -->|"6379"| redis
+    worker -->|"5432"| postgres
+    worker -->|"6379"| redis
+    migrate -->|"5432"| postgres
+    worker -->|"80, 443, not private ranges"| internet
+    web -.->|"53"| dns
+    api -.->|"53"| dns
+    worker -.->|"53"| dns
+    migrate -.->|"53"| dns
+```
 
 Two things worth knowing:
 
@@ -342,6 +420,28 @@ That order was checked on a fresh namespace: postgres and redis first, migrate
 eleven seconds later once they were healthy, the three services ten seconds
 after the job completed.
 
+The whole path from a branch to a running pod:
+
+```mermaid
+graph TD
+    dev["push a branch,<br/>open a pull request"] --> ci1["ci on the pull request<br/>lint, test, build, scan<br/>nothing is pushed"]
+    ci1 -->|"ci-ok green, rebase and merge"| main["main"]
+    main --> changes["changes<br/>which services did this touch?"]
+    changes -->|"api/"| ta["test-api"]
+    changes -->|"worker/"| tw["test-worker"]
+    ta --> build
+    tw --> build
+    changes -->|"web/, db/"| build["build, one job per service<br/>hadolint, build once,<br/>trivy, push that image"]
+    build --> ghcr[("ghcr.io<br/>image:sha")]
+    build --> um["update-manifests<br/>pin the release overlay,<br/>open a deploy/sha pull request"]
+    um -->|"ci-ok green, merge"| main2["main<br/>release overlay points at :sha"]
+    main2 --> argo["argocd<br/>polls main every 3 min"]
+    argo --> w0["wave 0<br/>namespace, config, sealed secret,<br/>policies, postgres, redis"]
+    w0 -->|"healthy"| w1["wave 1<br/>migrate job, a sync hook"]
+    w1 -->|"completed"| w2["wave 2<br/>api, worker, web<br/>rolled to :sha"]
+    ghcr -.->|"pulled by"| w2
+```
+
 `make argocd-ui` port-forwards the UI to https://localhost:8083. The user is
 `admin` and the target prints the command for the initial password. The dex,
 notifications and applicationset controllers are scaled to zero in
@@ -367,24 +467,6 @@ from a pod the policies allow to reach the api, for example a few
 `kubectl run` busybox pods labelled `app=web` looping `wget` against
 `api:8000/api/sites`, and the replica count climbs within a minute. Delete
 them and it comes back down about a minute later.
-- **Every container runs as a numeric non-root uid** with a read only root
-  filesystem and all capabilities dropped. Distroless names its user `nonroot`,
-  and Kubernetes cannot verify a named user, so the worker states uid 65532
-  explicitly.
-- **Jobs are immutable**, so `make deploy` deletes the previous migrate Job
-  before applying. ArgoCD does the same through annotations on the Job: it is
-  a `Sync` hook with `hook-delete-policy: BeforeHookCreation`, so every sync
-  deletes the old Job and runs a fresh one. Sync waves give the order: the
-  stores in wave 0, migrate in wave 1, api, worker and web in wave 2, and
-  ArgoCD waits for each wave to be healthy before starting the next. It is not
-  a `PreSync` hook on purpose. On a first install Postgres does not exist
-  until the Sync phase, and a PreSync migrate would wait for it forever.
-- **Image tags live in the overlays, not the base.** The local overlay points
-  at `uptime-checker/<service>:dev`, which is what `make build` produces. The
-  release overlay points at `ghcr.io/khadirullah/uptime-checker/<service>` at a
-  commit sha. A deploy is the pipeline changing that sha in a pull request and
-  someone merging it. The two never collide, so a pipeline run does not break
-  the local loop.
 
 ## Tests
 
@@ -418,7 +500,8 @@ make scan         # trivy, fails on a fixable HIGH or CRITICAL
 
 ## Pipeline
 
-`.github/workflows/ci.yml` runs on pull requests and on pushes to `main`.
+`.github/workflows/ci.yml` runs on pull requests, on pushes to `main`, and on
+a manual run.
 
 ```mermaid
 graph LR
@@ -431,17 +514,24 @@ graph LR
 
     changes --> ta --> b
     changes --> tw --> b
+    changes --> b
     b -->|"main only"| um
+    changes --> um
+    changes --> ok
     ta --> ok
     tw --> ok
     b --> ok
 ```
 
+`changes` feeds every job, since each one needs to know which services are in
+play.
+
 What each stage does and why it is shaped that way:
 
 - **Path filters.** `changes` lists the services whose files changed. A pull
   request that touches `web/` builds and scans only the web image. A change to
-  `k8s/` or the README builds nothing. A manual run builds all four.
+  `k8s/` or the README builds nothing. A change to `ci.yml` itself, or a
+  manual run, builds all four.
 - **Real gates.** flake8 fails the job on any finding. pytest fails below the
   coverage threshold. gofmt, vet and the race detector all fail the job. There
   is no `--exit-zero` and nothing is optional.
@@ -454,9 +544,9 @@ What each stage does and why it is shaped that way:
   can do about it. The two alpine images run `apk upgrade` at build time for
   the same reason: the upstream images lag alpine's fixes by days to weeks.
 - **Least permission.** The workflow token can only read the repository and
-  its pull requests. `build` adds `packages: write` to push images, and only
-  on `main`. Nothing in the workflow can write to the repository with that
-  token. Pull requests never push anything.
+  its pull requests. The `build` job carries `packages: write`, and its login
+  and push steps run only on a push to `main`. Nothing in the workflow can
+  write to the repository with that token. Pull requests never push anything.
 - **The deploy is a pull request.** After a push to `main`, `update-manifests`
   rewrites `newTag` in `k8s/overlays/release/kustomization.yaml` for each
   service that was rebuilt and opens a pull request with the change. It uses
@@ -479,7 +569,7 @@ Images are published to `ghcr.io/khadirullah/uptime-checker/<service>` tagged
 with the short commit sha, plus `latest` on `main`.
 
 `.github/dependabot.yml` opens weekly pull requests for pip, Go modules, the
-four base images and the actions. Each one runs through the pipeline, so a
+base images in the four Dockerfiles, and the actions. Each one runs through the pipeline, so a
 bumped base image is scanned before it is merged.
 
 ## How this maps to a real team
