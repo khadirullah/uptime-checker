@@ -16,7 +16,8 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "2"   # after the migrate job (wave 1) has finished
 spec:
-  replicas: 2
+  # no replica count here on purpose: the HorizontalPodAutoscaler in api-hpa.yaml owns it
+  # (2 to 5). a number here would be reapplied by argocd on every sync and fight the hpa.
   selector:
     matchLabels:
       app: api

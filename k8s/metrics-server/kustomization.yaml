@@ -1,0 +1,15 @@
+# metrics-server, pinned. the api's HorizontalPodAutoscaler reads cpu from it.
+# the one patch is for kind: its kubelet serving certs are not signed for the node ip,
+# so metrics-server has to skip verification. a managed cluster does not need this.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - https://github.com/kubernetes-sigs/metrics-server/releases/download/v0.9.0/components.yaml
+patches:
+  - patch: |
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --kubelet-insecure-tls
+    target:
+      kind: Deployment
+      name: metrics-server

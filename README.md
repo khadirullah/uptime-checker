@@ -7,9 +7,9 @@ Built as the application workload for a DevSecOps pipeline project. The app is
 deliberately small. The interesting part is running it: three services in two
 languages, a database, a queue, and everything that needs around them.
 
-Status: the pipeline, sealed secrets, network policies and ArgoCD are in.
-An autoscaler on the api is landing next, and the docs will be reshaped once
-it does.
+Status: the application, the pipeline, sealed secrets, network policies,
+ArgoCD and autoscaling are in. What remains is writing, the decision records
+and the runbook under `docs/`.
 
 ## Services
 
@@ -30,7 +30,7 @@ graph LR
 
     subgraph runtime ["kubernetes namespace uptime, or docker compose"]
         web["web<br/>nginx, static page"]
-        api["api<br/>FastAPI, 2 replicas"]
+        api["api<br/>FastAPI, 2 to 5 replicas"]
         worker["worker<br/>Go"]
         redis[("redis<br/>queue and latest status")]
         postgres[("postgres<br/>sites and check history")]
@@ -199,7 +199,7 @@ a local [kind](https://kind.sigs.k8s.io) cluster and need `kind`, `kubectl` and
 Docker. The Makefile wraps the steps:
 
 ```
-make kind-up     # one node cluster named "uptime" with policy enforcement, sealed-secrets and argocd
+make kind-up     # one node cluster named "uptime" with policy enforcement, sealed-secrets, metrics-server and argocd
 make build       # build the four images with the :dev tag
 make load        # copy them into the kind node, no registry involved
 make deploy      # apply k8s/ and wait for everything to roll out
@@ -229,7 +229,8 @@ What is in `k8s/`:
 | `base/postgres.yaml`          | StatefulSet with a 1Gi volume claim and a headless Service |
 | `base/redis.yaml`             | Deployment, no persistence, the queue and cache rebuild themselves |
 | `base/migrate-job.yaml`       | Job that applies the migrations before the services start |
-| `base/api.yaml`               | 2 replicas, liveness on `/healthz`, readiness on `/readyz` |
+| `base/api.yaml`               | liveness on `/healthz`, readiness on `/readyz`. no replica count, the autoscaler owns it |
+| `base/api-hpa.yaml`           | HorizontalPodAutoscaler for the api, 2 to 5 replicas on cpu |
 | `base/worker.yaml`            | 1 replica, no Service, nothing talks to it |
 | `base/web.yaml`               | nginx behind a NodePort Service |
 | `base/network-policies.yaml`  | default deny, then one allow per arrow in the architecture diagram |
@@ -238,6 +239,7 @@ What is in `k8s/`:
 | `sealed-secrets/cert.pem`     | the cluster's public sealing cert. committed on purpose, anyone can seal with it and nobody can unseal |
 | `argocd/install/`             | argocd itself, pinned, with the unused controllers scaled to zero |
 | `argocd/application.yaml`     | the one Application: release overlay on `main` into namespace `uptime`, automated sync |
+| `metrics-server/`             | metrics-server, pinned, with the one flag kind needs |
 
 Decisions worth knowing:
 
@@ -345,6 +347,26 @@ after the job completed.
 notifications and applicationset controllers are scaled to zero in
 `k8s/argocd/install/`, since one user with no SSO does not need them and they
 would idle at about 200MB on a laptop.
+
+### Autoscaling
+
+`k8s/base/api-hpa.yaml` scales the api between 2 and 5 replicas on CPU, at 60
+percent of the 50m request. That target is low on purpose so the behaviour can
+be seen on a laptop. The Deployment carries no replica count of its own,
+because a number there would be reapplied by ArgoCD on every sync and the two
+would fight. The scale-down window is 60 seconds instead of the default 300,
+again so a demo does not take five minutes to settle.
+
+The autoscaler reads from metrics-server, installed by `make kind-up` from
+`k8s/metrics-server/`. The one patch there, `--kubelet-insecure-tls`, is for
+kind only: its kubelet serving certificates are not signed for the node IP. A
+managed cluster does not need it.
+
+`make deploy` then `kubectl -n uptime-dev get hpa -w` shows it working. Load it
+from a pod the policies allow to reach the api, for example a few
+`kubectl run` busybox pods labelled `app=web` looping `wget` against
+`api:8000/api/sites`, and the replica count climbs within a minute. Delete
+them and it comes back down about a minute later.
 - **Every container runs as a numeric non-root uid** with a read only root
   filesystem and all capabilities dropped. Distroless names its user `nonroot`,
   and Kubernetes cannot verify a named user, so the worker states uid 65532
@@ -490,6 +512,7 @@ db/             migrations, the script that applies them, and their Dockerfile
 k8s/base/       kubernetes manifests
 k8s/overlays/   local (kind, :dev images) and release (GHCR images, pinned by the pipeline)
 k8s/argocd/     argocd install and the Application that deploys the release overlay
+k8s/metrics-server/  metrics-server for the autoscaler
 k8s/sealed-secrets/  the public sealing cert
 k8s/kind-config.yaml
 docker-compose.yml

@@ -16,6 +16,7 @@ resources:
   - redis.yaml
   - migrate-job.yaml
   - api.yaml
+  - api-hpa.yaml
   - worker.yaml
   - web.yaml
   - network-policies.yaml

@@ -17,14 +17,20 @@ SEALED_KEY_SELECTOR := sealedsecrets.bitnami.com/sealed-secrets-key=active
 KNP_VERSION := v1.1.1
 
 .PHONY: kind-up kind-down build load deploy redeploy status logs-% undeploy hadolint scan \
-        sealed-secrets-up sealed-key-backup seal network-policies-up argocd-up argocd-app argocd-ui
+        sealed-secrets-up sealed-key-backup seal network-policies-up metrics-server-up \
+        argocd-up argocd-app argocd-ui
 
-kind-up:            ## create the kind cluster with policy enforcement, sealed-secrets and argocd
+kind-up:            ## create the kind cluster with policy enforcement, sealed-secrets, metrics-server and argocd
 	kind create cluster --config k8s/kind-config.yaml --wait 120s
 	$(MAKE) network-policies-up
 	$(MAKE) sealed-secrets-up
+	$(MAKE) metrics-server-up
 	$(MAKE) argocd-up
 	$(MAKE) argocd-app
+
+metrics-server-up:  ## install metrics-server, which the api autoscaler reads cpu from
+	kubectl apply -k k8s/metrics-server
+	kubectl -n kube-system rollout status deployment/metrics-server --timeout=180s
 
 argocd-up:          ## install argocd (server-side apply, the crds are too big for client-side)
 	kubectl apply --server-side -k k8s/argocd/install

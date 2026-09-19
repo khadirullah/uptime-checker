@@ -1,0 +1,24 @@
+# scales the api on cpu. the Deployment sets no replica count of its own, so this is the
+# only thing that decides it and argocd does not fight it. 60% of a 50m request is 30m per
+# pod, low on purpose so the behaviour can be seen on a laptop.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: api
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: api
+  minReplicas: 2
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 60
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 60   # default is 300, too slow to watch in a demo
