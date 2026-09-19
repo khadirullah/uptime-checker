@@ -8,7 +8,7 @@ resources:
 images:
   - name: uptime-checker/api
     newName: ghcr.io/khadirullah/uptime-checker/api
-    newTag: 9bd2465
+    newTag: 8670b14
   - name: uptime-checker/worker
     newName: ghcr.io/khadirullah/uptime-checker/worker
     newTag: 9bd2465
