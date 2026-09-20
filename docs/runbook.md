@@ -231,6 +231,12 @@ make undeploy          # delete the namespace, including the database volume
 make hadolint scan     # the two image gates the pipeline runs, before pushing
 ```
 
+`make build` passes `--pull`, so Docker checks the registry for a newer base
+image before every build instead of reusing the copy it already has. Without
+it a base pulled two weeks ago stays in use, its packages age, and `make scan`
+fails on findings the pipeline never sees, because a CI runner starts empty and
+always pulls fresh.
+
 Compose is the other local loop, without Kubernetes: `docker compose up
 --build`, board on localhost:8080. The README covers it.
 
