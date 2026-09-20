@@ -73,8 +73,8 @@ kind-down:          ## delete the kind cluster
 	kind delete cluster --name $(CLUSTER)
 
 build:              ## build the service images and the migrate image
-	@for s in api worker web; do docker build -t uptime-checker/$$s:$(TAG) ./$$s || exit 1; done
-	docker build -t uptime-checker/migrate:$(TAG) ./db
+	@for s in api worker web; do docker build --pull -t uptime-checker/$$s:$(TAG) ./$$s || exit 1; done
+	docker build --pull -t uptime-checker/migrate:$(TAG) ./db
 
 load:               ## copy the images into the kind node (no registry needed)
 	@for s in $(IMAGES); do kind load docker-image uptime-checker/$$s:$(TAG) --name $(CLUSTER) || exit 1; done
