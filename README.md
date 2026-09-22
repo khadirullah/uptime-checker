@@ -7,6 +7,8 @@ Built as the application workload for a DevSecOps pipeline project. The app is
 deliberately small. The interesting part is running it: three services in two
 languages, a database, a queue, and everything that needs around them.
 
+![Animated ring of eight steps: push a branch, ci on the pull request, ci-ok and merge, changes, build per service, deploy pull request, argocd, sync waves. Each step lights up in turn with a one-line explanation.](docs/media/pipeline-flow.gif)
+
 Two more documents live in `docs/`. [decisions.md](docs/decisions.md) records
 why each part is the way it is, and [runbook.md](docs/runbook.md) has the
 commands for every operation this repo has needed so far.
