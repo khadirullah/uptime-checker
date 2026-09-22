@@ -3,6 +3,8 @@
 A small website monitor. You add URLs, a background worker fetches each one every
 minute, and a board shows which are up, which are down, and how fast they answered.
 
+![The uptime-checker board: three sites up with their response times, one down with the DNS error the worker got](docs/media/board.webp)
+
 Built as the application workload for a DevSecOps pipeline project. The app is
 deliberately small. The interesting part is running it: three services in two
 languages, a database, a queue, and everything that needs around them.
