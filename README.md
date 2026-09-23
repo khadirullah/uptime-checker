@@ -95,6 +95,10 @@ docker compose down --volumes --rmi local   # also remove the built images
 Then open http://localhost:8080. The api is also exposed on http://localhost:8000
 with interactive docs at http://localhost:8000/docs.
 
+The board is one static page and reflows to a single column on a phone:
+
+<img src="docs/media/board-phone.png" width="320" alt="The uptime-checker board on a phone, one tile per row, three sites up and one down">
+
 ### Configuration
 
 The defaults are:
