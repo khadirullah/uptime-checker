@@ -2,7 +2,7 @@
 # only psql and pg_isready are needed, so this is alpine plus the client package (about 20MB)
 # rather than the full postgres image (over 400MB, and it carries gosu, a Go binary that
 # picks up every Go stdlib CVE).
-FROM alpine:3.23
+FROM alpine:3.24
 # the client package version is not pinned on purpose: alpine keeps only the newest build of
 # a package in its repository, so a pin breaks the build a few weeks after it is written.
 # apk upgrade pulls fixes the base image has not been rebuilt with yet.
