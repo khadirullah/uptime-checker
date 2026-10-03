@@ -22,4 +22,4 @@ images:
     newTag: ebbeca7
   - name: uptime-checker/migrate
     newName: ghcr.io/khadirullah/uptime-checker/migrate
-    newTag: ebbeca7
+    newTag: 950f8cd
