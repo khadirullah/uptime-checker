@@ -16,7 +16,7 @@ images:
     newTag: ebbeca7
   - name: uptime-checker/worker
     newName: ghcr.io/khadirullah/uptime-checker/worker
-    newTag: ebbeca7
+    newTag: 76c63ad
   - name: uptime-checker/web
     newName: ghcr.io/khadirullah/uptime-checker/web
     newTag: ebbeca7
