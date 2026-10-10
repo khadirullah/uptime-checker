@@ -1,4 +1,4 @@
-fastapi==0.142.2
+fastapi==0.142.4
 uvicorn[standard]==0.54.0
 psycopg[binary,pool]==3.3.6
 redis==8.1.0
